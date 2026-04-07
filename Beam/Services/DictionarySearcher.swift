@@ -34,6 +34,20 @@ class DictionarySearcher {
 
         let fullDef = definition
         let defWord = word
+
+        // Split full definition into lines for expansion
+        let detailItems = fullDef.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .map { line in
+                DetailItem(label: "", value: line, icon: nil, actions: [
+                    ResultAction(name: "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(line, forType: .string)
+                    }
+                ])
+            }
+
         return [SearchResult(
             type: .definition,
             title: defWord.capitalized,
@@ -48,7 +62,8 @@ class DictionarySearcher {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(defWord, forType: .string)
                 },
-            ]
+            ],
+            details: detailItems
         )]
     }
 }

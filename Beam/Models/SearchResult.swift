@@ -37,6 +37,13 @@ struct ResultAction {
     let handler: () -> Void
 }
 
+struct DetailItem {
+    let label: String
+    let value: String
+    let icon: String?
+    let actions: [ResultAction]
+}
+
 struct SearchResult: Identifiable {
     let id = UUID()
     let type: SearchResultType
@@ -44,7 +51,8 @@ struct SearchResult: Identifiable {
     let subtitle: String
     let icon: NSImage?
     let actions: [ResultAction]
+    var details: [DetailItem] = []
 
-    /// Convenience for backward compat — primary action
     var action: () -> Void { actions.first?.handler ?? {} }
+    var isExpandable: Bool { !details.isEmpty }
 }

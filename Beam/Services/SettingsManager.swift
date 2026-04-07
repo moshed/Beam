@@ -1,5 +1,6 @@
 import Foundation
 import Carbon
+import ServiceManagement
 
 struct KeyCombo: Codable, Equatable {
     var keyCode: UInt32
@@ -16,6 +17,9 @@ struct KeyCombo: Codable, Equatable {
     }
 
     static let defaultToggle = KeyCombo(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey))
+    static let defaultHistory = KeyCombo(keyCode: UInt32(kVK_DownArrow), modifiers: 0)
+    static let defaultExpand = KeyCombo(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(cmdKey))
+    static let defaultCollapse = KeyCombo(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(cmdKey))
 
     func matches(keyCode kc: UInt32, modifiers mods: UInt32) -> Bool {
         self.keyCode == kc && self.modifiers == mods
@@ -78,6 +82,18 @@ class SettingsManager: ObservableObject {
         didSet { saveKeyCombo(toggleShortcut, forKey: "toggleShortcut") }
     }
 
+    @Published var historyShortcut: KeyCombo {
+        didSet { saveKeyCombo(historyShortcut, forKey: "historyShortcut") }
+    }
+
+    @Published var expandShortcut: KeyCombo {
+        didSet { saveKeyCombo(expandShortcut, forKey: "expandShortcut") }
+    }
+
+    @Published var collapseShortcut: KeyCombo {
+        didSet { saveKeyCombo(collapseShortcut, forKey: "collapseShortcut") }
+    }
+
     @Published var resultDisplayMode: ResultDisplayMode {
         didSet { UserDefaults.standard.set(resultDisplayMode.rawValue, forKey: "resultDisplayMode") }
     }
@@ -117,10 +133,29 @@ class SettingsManager: ObservableObject {
         return 999
     }
 
+    var launchAtLogin: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            objectWillChange.send()
+            do {
+                if newValue {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                print("Launch at login error: \(error)")
+            }
+        }
+    }
+
     var onToggleShortcutChanged: (() -> Void)?
 
     private init() {
         self.toggleShortcut = SettingsManager.loadKeyCombo(forKey: "toggleShortcut") ?? .defaultToggle
+        self.historyShortcut = SettingsManager.loadKeyCombo(forKey: "historyShortcut") ?? .defaultHistory
+        self.expandShortcut = SettingsManager.loadKeyCombo(forKey: "expandShortcut") ?? .defaultExpand
+        self.collapseShortcut = SettingsManager.loadKeyCombo(forKey: "collapseShortcut") ?? .defaultCollapse
 
         let modeStr = UserDefaults.standard.string(forKey: "resultDisplayMode") ?? ResultDisplayMode.relevance.rawValue
         self.resultDisplayMode = ResultDisplayMode(rawValue: modeStr) ?? .relevance

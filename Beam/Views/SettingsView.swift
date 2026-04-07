@@ -4,10 +4,13 @@ import Carbon
 struct SettingsView: View {
     @ObservedObject var settings = SettingsManager.shared
     @State private var isRecordingShortcut = false
+    @State private var isRecordingHistoryShortcut = false
+    @State private var isRecordingExpandShortcut = false
+    @State private var isRecordingCollapseShortcut = false
 
     var body: some View {
         TabView {
-            GeneralSettingsTab(settings: settings, isRecordingShortcut: $isRecordingShortcut)
+            GeneralSettingsTab(settings: settings, isRecordingShortcut: $isRecordingShortcut, isRecordingHistoryShortcut: $isRecordingHistoryShortcut, isRecordingExpandShortcut: $isRecordingExpandShortcut, isRecordingCollapseShortcut: $isRecordingCollapseShortcut)
                 .tabItem { Label("General", systemImage: "gear") }
             ActionsSettingsTab(settings: settings)
                 .tabItem { Label("Actions", systemImage: "hand.tap") }
@@ -19,17 +22,67 @@ struct SettingsView: View {
 struct GeneralSettingsTab: View {
     @ObservedObject var settings: SettingsManager
     @Binding var isRecordingShortcut: Bool
+    @Binding var isRecordingHistoryShortcut: Bool
+    @Binding var isRecordingExpandShortcut: Bool
+    @Binding var isRecordingCollapseShortcut: Bool
 
     var body: some View {
         Form {
-            Section("Global Shortcut") {
+            Section("Startup") {
+                Toggle("Launch Beam at login", isOn: $settings.launchAtLogin)
+            }
+
+            Section("Shortcuts") {
                 HStack {
                     Text("Activate Beam")
                     Spacer()
                     ShortcutRecorderView(
                         combo: $settings.toggleShortcut,
-                        isRecording: $isRecordingShortcut
+                        isRecording: $isRecordingShortcut,
+                        allowBareKeys: false
                     )
+                }
+                HStack {
+                    Text("Show History")
+                    Spacer()
+                    ShortcutRecorderView(
+                        combo: $settings.historyShortcut,
+                        isRecording: $isRecordingHistoryShortcut,
+                        allowBareKeys: true
+                    )
+                }
+                Text("Triggers when search bar is empty")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("Expand Result")
+                    Spacer()
+                    ShortcutRecorderView(
+                        combo: $settings.expandShortcut,
+                        isRecording: $isRecordingExpandShortcut,
+                        allowBareKeys: true
+                    )
+                }
+                HStack {
+                    Text("Collapse Result")
+                    Spacer()
+                    ShortcutRecorderView(
+                        combo: $settings.collapseShortcut,
+                        isRecording: $isRecordingCollapseShortcut,
+                        allowBareKeys: true
+                    )
+                }
+            }
+
+            Section("History") {
+                HStack {
+                    Text("\(HistoryManager.shared.entries.count) entries")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear History") {
+                        HistoryManager.shared.clearHistory()
+                    }
+                    .foregroundStyle(.red)
                 }
             }
 
@@ -251,6 +304,7 @@ struct SectionOrderTab: View {
 struct ShortcutRecorderView: View {
     @Binding var combo: KeyCombo
     @Binding var isRecording: Bool
+    var allowBareKeys: Bool = false
 
     var body: some View {
         Button(action: { isRecording.toggle() }) {
@@ -269,7 +323,7 @@ struct ShortcutRecorderView: View {
         }
         .buttonStyle(.plain)
         .background(
-            ShortcutCaptureView(combo: $combo, isRecording: $isRecording)
+            ShortcutCaptureView(combo: $combo, isRecording: $isRecording, allowBareKeys: allowBareKeys)
                 .frame(width: 0, height: 0)
         )
     }
@@ -278,9 +332,11 @@ struct ShortcutRecorderView: View {
 struct ShortcutCaptureView: NSViewRepresentable {
     @Binding var combo: KeyCombo
     @Binding var isRecording: Bool
+    var allowBareKeys: Bool = false
 
     func makeNSView(context: Context) -> ShortcutCaptureNSView {
         let view = ShortcutCaptureNSView()
+        view.allowBareKeys = allowBareKeys
         view.onCapture = { [self] keyCode, modifiers in
             combo = KeyCombo(keyCode: keyCode, modifiers: modifiers)
             isRecording = false
@@ -290,13 +346,25 @@ struct ShortcutCaptureView: NSViewRepresentable {
 
     func updateNSView(_ nsView: ShortcutCaptureNSView, context: Context) {
         nsView.isCapturing = isRecording
+        nsView.allowBareKeys = allowBareKeys
     }
 }
 
 class ShortcutCaptureNSView: NSView {
     var isCapturing = false
+    var allowBareKeys = false
     var onCapture: ((UInt32, UInt32) -> Void)?
     private var monitor: Any?
+
+    private static let bareKeyAllowList: Set<UInt16> = [
+        UInt16(kVK_DownArrow), UInt16(kVK_UpArrow),
+        UInt16(kVK_LeftArrow), UInt16(kVK_RightArrow),
+        UInt16(kVK_Space), UInt16(kVK_Tab),
+        UInt16(kVK_F1), UInt16(kVK_F2), UInt16(kVK_F3),
+        UInt16(kVK_F4), UInt16(kVK_F5), UInt16(kVK_F6),
+        UInt16(kVK_F7), UInt16(kVK_F8), UInt16(kVK_F9),
+        UInt16(kVK_F10), UInt16(kVK_F11), UInt16(kVK_F12),
+    ]
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -316,8 +384,9 @@ class ShortcutCaptureNSView: NSView {
                     return nil
                 }
 
-                // Accept: modifier+key, or Space alone
-                if mods != 0 || event.keyCode == UInt16(kVK_Space) {
+                // Accept: modifier+key, Space alone, or bare keys from allowlist
+                if mods != 0 || event.keyCode == UInt16(kVK_Space) ||
+                   (self.allowBareKeys && Self.bareKeyAllowList.contains(event.keyCode)) {
                     self.onCapture?(UInt32(event.keyCode), mods)
                     return nil
                 }

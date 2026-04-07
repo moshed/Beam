@@ -10,6 +10,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var hotkeyManager: HotkeyManager?
     private(set) var searchCoordinator = SearchCoordinator()
     var settingsWindow: NSWindow?
+    private var keystrokeBuffer: String = ""
+    private var isShowingPanel = false
+    private var previousApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -91,16 +94,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func showPanel() {
         guard let panel = panel else { return }
+        previousApp = NSWorkspace.shared.frontmostApplication
+        keystrokeBuffer = ""
+        isShowingPanel = true
+
+        // Capture keystrokes globally while panel is activating
+        let monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, self.isShowingPanel else { return }
+            if let chars = event.characters,
+               !event.modifierFlags.contains(.command),
+               !event.modifierFlags.contains(.control),
+               event.keyCode != 53 /* Escape */ {
+                self.keystrokeBuffer += chars
+            }
+        }
+
         searchCoordinator.restorePrevious()
         panel.centerOnActiveScreen()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeFocused()
+
+        // Poll until the text field is focused, then flush
+        var attempts = 0
+        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            attempts += 1
+            let focused = panel.firstResponder is NSTextView
+            if focused || attempts > 20 { // max 1 second
+                timer.invalidate()
+                if let m = monitor as AnyObject? {
+                    NSEvent.removeMonitor(m)
+                }
+                self.isShowingPanel = false
+                if !self.keystrokeBuffer.isEmpty {
+                    let newQuery = self.searchCoordinator.query + self.keystrokeBuffer
+                    self.searchCoordinator.queryChanged(newQuery)
+                    // Push to the text field
+                    if let editor = panel.firstResponder as? NSTextView {
+                        editor.string = newQuery
+                        editor.setSelectedRange(NSRange(location: newQuery.count, length: 0))
+                    }
+                }
+            }
+        }
     }
 
     func dismissPanel() {
         searchCoordinator.saveAndClear()
         panel?.orderOut(nil)
+        if let app = previousApp, !app.isTerminated {
+            app.activate()
+        }
+        previousApp = nil
     }
 
     // MARK: - Settings

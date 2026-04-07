@@ -62,6 +62,42 @@ class KeyCaptureView: NSView {
         let keyCode = event.keyCode
         let flags = event.modifierFlags
 
+        // Check for history shortcut
+        let historyCombo = SettingsManager.shared.historyShortcut
+        if historyCombo.matches(keyCode: UInt32(keyCode), modifiers: carbonModifiers(from: flags)),
+           !coordinator.isHistoryMode,
+           coordinator.query.isEmpty,
+           coordinator.results.isEmpty {
+            coordinator.showHistory()
+            return true
+        }
+
+        // Check expand/collapse shortcuts
+        let mods = carbonModifiers(from: flags)
+        let expandCombo = SettingsManager.shared.expandShortcut
+        let collapseCombo = SettingsManager.shared.collapseShortcut
+
+        if expandCombo.matches(keyCode: UInt32(keyCode), modifiers: mods) {
+            if coordinator.isHistoryMode {
+                coordinator.cycleHistoryFilter(forward: true)
+                return true
+            } else if coordinator.selectedIndex >= 0,
+                      coordinator.selectedIndex < coordinator.results.count,
+                      coordinator.results[coordinator.selectedIndex].isExpandable {
+                coordinator.expandSelected()
+                return true
+            }
+        }
+        if collapseCombo.matches(keyCode: UInt32(keyCode), modifiers: mods) {
+            if coordinator.isHistoryMode {
+                coordinator.cycleHistoryFilter(forward: false)
+                return true
+            } else if coordinator.expandedResultId != nil {
+                coordinator.collapseExpanded()
+                return true
+            }
+        }
+
         switch Int(keyCode) {
         case kVK_DownArrow:
             coordinator.moveDown()
@@ -71,18 +107,26 @@ class KeyCaptureView: NSView {
             return true
         case kVK_Return:
             if !coordinator.results.isEmpty {
-                if flags.contains(.option) {
-                    coordinator.executeOptionEnter()
-                } else if flags.contains(.shift) {
-                    coordinator.executeShiftEnter()
-                } else {
-                    coordinator.executeSelected()
+                let wasHistoryMode = coordinator.isHistoryMode && coordinator.expandedDetailIndex == nil
+                let slot = flags.contains(.option) ? 2 : flags.contains(.shift) ? 1 : 0
+                let shouldDismiss = coordinator.executeFocusedAction(slot: slot)
+                if shouldDismiss {
+                    AppDelegate.shared?.dismissPanel()
+                } else if wasHistoryMode {
+                    // History entry selected — query was filled, update text field
+                    panel?.makeFocused()
+                    if let editor = panel?.firstResponder as? NSTextView {
+                        editor.string = coordinator.query
+                        editor.setSelectedRange(NSRange(location: coordinator.query.count, length: 0))
+                    }
                 }
-                AppDelegate.shared?.dismissPanel()
             }
             return true
         case kVK_Escape:
-            if !coordinator.query.isEmpty {
+            if coordinator.isHistoryMode {
+                coordinator.exitHistoryMode()
+                panel?.makeFocused()
+            } else if !coordinator.query.isEmpty {
                 coordinator.clearInput()
                 panel?.makeFocused()
             } else {
@@ -108,6 +152,22 @@ class KeyCaptureView: NSView {
             }
             return false
         default:
+            // In history mode, any typed character exits history and starts a search
+            if coordinator.isHistoryMode,
+               let chars = event.characters, !chars.isEmpty,
+               !flags.contains(.command), !flags.contains(.control) {
+                coordinator.exitHistoryMode()
+                coordinator.queryChanged(chars)
+                // Focus the text field and set the typed character
+                DispatchQueue.main.async { [weak self] in
+                    self?.panel?.makeFocused()
+                    if let editor = self?.panel?.firstResponder as? NSTextView {
+                        editor.string = chars
+                        editor.setSelectedRange(NSRange(location: chars.count, length: 0))
+                    }
+                }
+                return true
+            }
             return false
         }
     }
@@ -147,6 +207,15 @@ class KeyCaptureView: NSView {
             if let found = findTextField(in: sub) { return found }
         }
         return nil
+    }
+
+    private func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
+        var mods: UInt32 = 0
+        if flags.contains(.command) { mods |= UInt32(cmdKey) }
+        if flags.contains(.shift) { mods |= UInt32(shiftKey) }
+        if flags.contains(.option) { mods |= UInt32(optionKey) }
+        if flags.contains(.control) { mods |= UInt32(controlKey) }
+        return mods
     }
 
     deinit {

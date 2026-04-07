@@ -10,47 +10,41 @@ struct MathEvaluator {
         return f
     }()
 
-    static func evaluate(_ input: String) -> (expression: String, result: String)? {
+    static func evaluate(_ input: String) -> (expression: String, result: String, isInfo: Bool)? {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
 
         // Try currency-aware math first (e.g. "$6 $7 $8.9", "$1 + 1eur", "add $5 $10")
-        if let currMathResult = evaluateCurrencyMath(trimmed) {
-            return currMathResult
-        }
+        if let r = evaluateCurrencyMath(trimmed) { return (r.expression, r.result, false) }
 
         // Try natural language math first
-        if let nlResult = evaluateNaturalLanguage(trimmed) {
-            return nlResult
-        }
+        if let r = evaluateNaturalLanguage(trimmed) { return (r.expression, r.result, false) }
 
         // Try date calculations
-        if let dateResult = evaluateDate(trimmed) {
-            return dateResult
-        }
+        if let r = evaluateDate(trimmed) { return (r.expression, r.result, true) }
 
         // Try unit conversions
-        if let unitResult = evaluateUnitConversion(trimmed) {
-            return unitResult
-        }
+        if let r = evaluateUnitConversion(trimmed) { return (r.expression, r.result, false) }
 
         // Try currency conversions (explicit "X to Y")
-        if let currencyResult = evaluateCurrency(trimmed) {
-            return currencyResult
-        }
+        if let r = evaluateCurrency(trimmed) { return (r.expression, r.result, false) }
 
         // Auto-convert standalone currency to USD (e.g. "1 rmb" -> "$0.14")
-        if let autoResult = evaluateAutoCurrencyConvert(trimmed) {
-            return autoResult
-        }
+        if let r = evaluateAutoCurrencyConvert(trimmed) { return (r.expression, r.result, false) }
 
         // Auto-convert standalone units to US standard
-        if let autoUnit = evaluateAutoUnitConvert(trimmed) {
-            return autoUnit
-        }
+        if let r = evaluateAutoUnitConvert(trimmed) { return (r.expression, r.result, false) }
+
+        // Try standalone number abbreviation (e.g. "5k" -> "5,000", "2.5 million" -> "2,500,000")
+        if let r = evaluateAbbreviation(trimmed) { return (r.expression, r.result, false) }
+
+        // Equation solving (e.g. "21^2*x^2=16.25^2")
+        if let r = evaluateEquation(trimmed) { return (r.expression, r.result, true) }
 
         // Standard math expression
-        return evaluateExpression(trimmed)
+        if let r = evaluateExpression(trimmed) { return (r.expression, r.result, false) }
+
+        return nil
     }
 
     // MARK: - Currency-Aware Math
@@ -82,6 +76,13 @@ struct MathEvaluator {
     /// If even ONE token has a currency, bare numbers inherit that currency.
     private static func evaluateCurrencyMath(_ input: String) -> (expression: String, result: String)? {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
+
+        // If the expression has parentheses, multiplication, division, or power — it's a math expression, not a currency sum
+        if trimmed.contains("(") || trimmed.contains(")") || trimmed.contains("*") ||
+           trimmed.contains("/") || trimmed.contains("^") ||
+           trimmed.range(of: #"[xX]\s*\d"#, options: .regularExpression) != nil {
+            return nil
+        }
 
         // Check if input contains currency symbols BEFORE numbers (not after, e.g. "10$" is not currency)
         let symbolBeforeNum = #"[\$€£¥₪]\s*\d"#
@@ -150,7 +151,7 @@ struct MathEvaluator {
                 let sym = String(cleanNoComma[symRange])
                 let num = String(cleanNoComma[numRange])
                 currency = currencySymbols[sym]
-                amount = Double(num)
+                amount = parseNumber(num)
             }
             // Pattern 2: number + code (e.g. "5eur")
             else if match.range(at: 3).location != NSNotFound,
@@ -159,13 +160,13 @@ struct MathEvaluator {
                 let num = String(cleanNoComma[numRange])
                 let code = String(cleanNoComma[codeRange]).lowercased()
                 currency = currencySymbols[code]
-                amount = Double(num)
+                amount = parseNumber(num)
             }
             // Pattern 3: bare number — inherit the detected currency
             else if match.range(at: 5).location != NSNotFound,
                     let numRange = Range(match.range(at: 5), in: cleanNoComma) {
                 let num = String(cleanNoComma[numRange])
-                amount = Double(num)
+                amount = parseNumber(num)
                 currency = defaultCurrency
             }
 
@@ -223,7 +224,7 @@ struct MathEvaluator {
         // Strip currency symbols before parsing numbers
         let numbers = parts.dropFirst()
             .map { $0.replacingOccurrences(of: #"[\$€£¥₪]"#, with: "", options: .regularExpression) }
-            .compactMap { Double($0) }
+            .compactMap { parseNumber($0) }
         guard !numbers.isEmpty else { return nil }
 
         var result: Double?
@@ -267,7 +268,7 @@ struct MathEvaluator {
         case "percent", "percentage":
             // "percent 15 of 200" or "percent 15 200"
             let filtered = parts.dropFirst().filter { $0 != "of" }
-            let nums = filtered.compactMap { Double($0) }
+            let nums = filtered.compactMap { parseNumber($0) }
             if nums.count == 2 {
                 result = nums[0] / 100.0 * nums[1]
                 label = "\(format(nums[0]))% of \(format(nums[1]))"
@@ -284,6 +285,70 @@ struct MathEvaluator {
 
     private static func evaluateDate(_ input: String) -> (expression: String, result: String)? {
         let lower = input.lowercased().trimmingCharacters(in: .whitespaces)
+
+        // "+ X days/hours/minutes/months/years" or "- X days/hours/minutes/months/years"
+        if let _ = lower.range(of: #"^[+\-]\s*(\d+\.?\d*)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|yrs?)$"#, options: .regularExpression) {
+            let isNegative = lower.hasPrefix("-")
+            let stripped = lower.dropFirst().trimmingCharacters(in: .whitespaces)
+            let numParts = stripped.components(separatedBy: .whitespaces)
+            guard numParts.count >= 2, let amount = Double(numParts[0]) else { return nil }
+            let unit = numParts.dropFirst().joined(separator: " ")
+            let direction: Double = isNegative ? -1 : 1
+
+            let calendar = Calendar.current
+            var resultDate: Date?
+            var showTime = false
+
+            if unit.hasPrefix("sec") {
+                resultDate = calendar.date(byAdding: .second, value: Int(amount * direction), to: Date())
+                showTime = true
+            } else if unit.hasPrefix("min") {
+                resultDate = calendar.date(byAdding: .minute, value: Int(amount * direction), to: Date())
+                showTime = true
+            } else if unit.hasPrefix("hour") || unit.hasPrefix("hr") {
+                resultDate = calendar.date(byAdding: .hour, value: Int(amount * direction), to: Date())
+                showTime = true
+            } else if unit.hasPrefix("day") {
+                resultDate = calendar.date(byAdding: .day, value: Int(amount * direction), to: Date())
+            } else if unit.hasPrefix("week") {
+                resultDate = calendar.date(byAdding: .weekOfYear, value: Int(amount * direction), to: Date())
+            } else if unit.hasPrefix("month") {
+                resultDate = calendar.date(byAdding: .month, value: Int(amount * direction), to: Date())
+            } else if unit.hasPrefix("year") || unit.hasPrefix("yr") {
+                resultDate = calendar.date(byAdding: .year, value: Int(amount * direction), to: Date())
+            }
+
+            if let date = resultDate {
+                let calendar = Calendar.current
+                let now = Date()
+                if showTime {
+                    let timeFmt = DateFormatter()
+                    timeFmt.dateStyle = .none
+                    timeFmt.timeStyle = .short
+                    var timeStr = timeFmt.string(from: date)
+
+                    // Check if result crosses into a different day
+                    let nowDay = calendar.startOfDay(for: now)
+                    let resultDay = calendar.startOfDay(for: date)
+                    let dayDiff = calendar.dateComponents([.day], from: nowDay, to: resultDay).day ?? 0
+                    if dayDiff == 1 {
+                        timeStr += " (tomorrow)"
+                    } else if dayDiff == -1 {
+                        timeStr += " (yesterday)"
+                    } else if dayDiff != 0 {
+                        let dateFmt = DateFormatter()
+                        dateFmt.dateFormat = "MMM d"
+                        timeStr += " (\(dateFmt.string(from: date)))"
+                    }
+                    return (expression: input, result: timeStr)
+                } else {
+                    let fmt = DateFormatter()
+                    fmt.dateStyle = .long
+                    fmt.timeStyle = .none
+                    return (expression: input, result: fmt.string(from: date))
+                }
+            }
+        }
 
         // "X days/weeks/months from now" or "X days/weeks/months ago"
         if let match = lower.range(of: #"^(\d+)\s+(days?|weeks?|months?|years?)\s+(from now|from today|ago)$"#, options: .regularExpression) {
@@ -445,7 +510,7 @@ struct MathEvaluator {
         let fromUnit = String(matched[Range(result.range(at: 2), in: matched)!]).trimmingCharacters(in: .whitespaces)
         let toUnit = String(matched[Range(result.range(at: 3), in: matched)!]).trimmingCharacters(in: .whitespaces)
 
-        guard let value = Double(numStr) else { return nil }
+        guard let value = parseNumber(numStr) else { return nil }
 
         if let converted = convert(value, from: fromUnit, to: toUnit) {
             return (expression: input, result: "\(format(converted)) \(toUnit)")
@@ -506,6 +571,15 @@ struct MathEvaluator {
             "sqyd": 0.836127, "acre": 4046.86, "hectare": 10_000, "ha": 10_000, "sqin": 0.00064516
         ]
         if let fromFactor = areaToSqM[fromNorm], let toFactor = areaToSqM[toNorm] {
+            return value * fromFactor / toFactor
+        }
+
+        // Volume (cubic)
+        let cubicToCuMM: [String: Double] = [
+            "cumm": 1, "cucm": 1_000, "cum": 1_000_000_000, "cukm": 1e18,
+            "cuin": 16_387.064, "cuft": 28_316_846.592, "cuyd": 764_554_857.984, "cumi": 4.168e18
+        ]
+        if let fromFactor = cubicToCuMM[fromNorm], let toFactor = cubicToCuMM[toNorm] {
             return value * fromFactor / toFactor
         }
 
@@ -575,8 +649,24 @@ struct MathEvaluator {
             "sq ft": "sqft", "square foot": "sqft", "square feet": "sqft",
             "sq mi": "sqmi", "square mile": "sqmi", "square miles": "sqmi",
             "sq yd": "sqyd", "square yard": "sqyd", "square yards": "sqyd",
+            "sq in": "sqin", "square inch": "sqin", "square inches": "sqin",
             "acre": "acre", "acres": "acre",
             "hectare": "hectare", "hectares": "hectare",
+            // Cubic / Volume
+            "mm3": "cumm", "mm³": "cumm", "cu mm": "cumm", "cubic mm": "cumm",
+            "cubic millimeter": "cumm", "cubic millimeters": "cumm", "cubic millimetre": "cumm", "cubic millimetres": "cumm",
+            "cm3": "cucm", "cm³": "cucm", "cu cm": "cucm", "cubic cm": "cucm", "cc": "cucm",
+            "cubic centimeter": "cucm", "cubic centimeters": "cucm", "cubic centimetre": "cucm", "cubic centimetres": "cucm",
+            "m3": "cum", "m³": "cum", "cu m": "cum", "cubic m": "cum",
+            "cubic meter": "cum", "cubic meters": "cum", "cubic metre": "cum", "cubic metres": "cum",
+            "km3": "cukm", "km³": "cukm", "cu km": "cukm", "cubic km": "cukm",
+            "cubic kilometer": "cukm", "cubic kilometers": "cukm",
+            "in3": "cuin", "in³": "cuin", "cu in": "cuin", "cubic in": "cuin",
+            "cubic inch": "cuin", "cubic inches": "cuin",
+            "ft3": "cuft", "ft³": "cuft", "cu ft": "cuft", "cubic ft": "cuft",
+            "cubic foot": "cuft", "cubic feet": "cuft",
+            "yd3": "cuyd", "yd³": "cuyd", "cu yd": "cuyd", "cubic yd": "cuyd",
+            "cubic yard": "cuyd", "cubic yards": "cuyd",
             // Time
             "millisecond": "ms", "milliseconds": "ms",
             "second": "sec", "seconds": "sec", "secs": "sec",
@@ -668,7 +758,7 @@ struct MathEvaluator {
         let fromStr = String(lower[Range(match.range(at: 2), in: lower)!]).trimmingCharacters(in: .whitespaces)
         let toStr = String(lower[Range(match.range(at: 3), in: lower)!]).trimmingCharacters(in: .whitespaces)
 
-        guard let value = Double(numStr),
+        guard let value = parseNumber(numStr),
               let fromCurrency = currencyNames[fromStr],
               let toCurrency = currencyNames[toStr] else { return nil }
 
@@ -740,7 +830,7 @@ struct MathEvaluator {
             let numStr = String(lower[Range(match.range(at: p.numGroup), in: lower)!]).replacingOccurrences(of: ",", with: "")
             let curStr = String(lower[Range(match.range(at: p.curGroup), in: lower)!]).lowercased()
 
-            guard let value = Double(numStr),
+            guard let value = parseNumber(numStr),
                   let fromCurrency = currencyNames[curStr],
                   fromCurrency != "usd" else { continue }  // Don't convert USD to USD
 
@@ -774,6 +864,8 @@ struct MathEvaluator {
         ("kph", "mph", "mph"), ("kmh", "mph", "mph"),
         ("sqm", "sqft", "sq ft"), ("sqkm", "sqmi", "sq mi"),
         ("hectare", "acre", "acres"), ("ha", "acre", "acres"),
+        ("cumm", "cuin", "cu in"), ("cucm", "cuin", "cu in"),
+        ("cum", "cuft", "cu ft"), ("cukm", "cumi", "cu mi"),
     ]
 
     private static func evaluateAutoUnitConvert(_ input: String) -> (expression: String, result: String)? {
@@ -790,7 +882,7 @@ struct MathEvaluator {
         let numStr = String(lower[Range(match.range(at: 1), in: lower)!]).replacingOccurrences(of: ",", with: "")
         let unitStr = String(lower[Range(match.range(at: 2), in: lower)!]).trimmingCharacters(in: .whitespaces)
 
-        guard let value = Double(numStr) else { return nil }
+        guard let value = parseNumber(numStr) else { return nil }
 
         let normalized = normalizeUnit(unitStr)
 
@@ -805,11 +897,119 @@ struct MathEvaluator {
         return nil
     }
 
+    // MARK: - Equation Solver
+
+    private static func evaluateEquation(_ input: String) -> (expression: String, result: String)? {
+        var trimmed = input.trimmingCharacters(in: .whitespaces)
+
+        // Strip trailing "solve for x", "solve", "find x"
+        trimmed = trimmed.replacingOccurrences(
+            of: #"\s*,?\s*(solve\s*(for\s*x)?|find\s*x)\s*$"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+
+        guard trimmed.contains("=") else { return nil }
+        let sides = trimmed.components(separatedBy: "=")
+        guard sides.count == 2 else { return nil }
+
+        let lhs = sides[0].trimmingCharacters(in: .whitespaces)
+        let rhs = sides[1].trimmingCharacters(in: .whitespaces)
+        guard !lhs.isEmpty, !rhs.isEmpty else { return nil }
+
+        // Must contain x as a variable (not part of a word like sqrt, max, exp)
+        let varPat = #"(?<![a-zA-Z])x(?![a-zA-Z])"#
+        let hasVar = lhs.range(of: varPat, options: .regularExpression) != nil ||
+                     rhs.range(of: varPat, options: .regularExpression) != nil
+        guard hasVar else { return nil }
+
+        // f(x) = LHS - RHS; solve for f(x) = 0
+        func evalAt(_ xVal: Double) -> Double? {
+            guard let l = evalSide(lhs, x: xVal), let r = evalSide(rhs, x: xVal) else { return nil }
+            return l - r
+        }
+
+        // Newton's method from multiple starting points
+        let h = 1e-8
+        var solutions: [Double] = []
+        let starts: [Double] = [0.5, -0.5, 1, -1, 2, -2, 5, -5, 10, -10, 50, -50, 100, -100, 0.01, -0.01]
+
+        for x0 in starts {
+            var x = x0
+            var converged = false
+            for _ in 0..<300 {
+                guard let fx = evalAt(x) else { break }
+                if abs(fx) < 1e-10 { converged = true; break }
+                guard let fxp = evalAt(x + h), let fxm = evalAt(x - h) else { break }
+                let deriv = (fxp - fxm) / (2 * h)
+                if abs(deriv) < 1e-15 { break }
+                let step = fx / deriv
+                x -= step
+                if abs(step) < 1e-12 { converged = true; break }
+                if abs(x) > 1e15 { break }
+            }
+            if converged {
+                let rounded = (x * 1e9).rounded() / 1e9
+                let clean = rounded == 0 ? 0.0 : rounded
+                if !solutions.contains(where: { abs($0 - clean) < 1e-6 }) {
+                    solutions.append(clean)
+                }
+            }
+        }
+
+        guard !solutions.isEmpty else { return (expression: trimmed, result: "No solution found") }
+
+        let formatted = solutions.sorted().map { "x = \(format($0))" }
+        return (expression: trimmed, result: formatted.joined(separator: "  or  "))
+    }
+
+    /// Evaluate one side of an equation with x substituted
+    private static func evalSide(_ expr: String, x xVal: Double) -> Double? {
+        var e = expr
+
+        // Implicit multiplication around x variable
+        e = e.replacingOccurrences(of: #"(\d)\s*x(?![a-zA-Z])"#, with: "$1*x", options: .regularExpression)
+        e = e.replacingOccurrences(of: #"(?<![a-zA-Z])x\s*(\d)"#, with: "x*$1", options: .regularExpression)
+        e = e.replacingOccurrences(of: #"\)\s*x(?![a-zA-Z])"#, with: ")*x", options: .regularExpression)
+        e = e.replacingOccurrences(of: #"(?<![a-zA-Z])x\s*\("#, with: "x*(", options: .regularExpression)
+
+        // Substitute x with value (wrapped in parens for safety with negatives)
+        e = e.replacingOccurrences(of: #"(?<![a-zA-Z])x(?![a-zA-Z])"#, with: "(\(xVal))", options: .regularExpression)
+
+        // Same preprocessing as evaluateExpression
+        e = expandAbbreviations(e)
+        e = e.replacingOccurrences(of: #"[\$€£¥₪]"#, with: "", options: .regularExpression)
+        e = e.replacingOccurrences(of: #"√\s*\(([^)]+)\)"#, with: "sqrt($1)", options: .regularExpression)
+        e = e.replacingOccurrences(of: #"√\s*([\d.]+)"#, with: "sqrt($1)", options: .regularExpression)
+        e = e.replacingOccurrences(of: "^", with: "**")
+
+        // Force floating-point division
+        e = e.replacingOccurrences(of: #"(?<![.\d])(\d+)(?![\d.])"#, with: "$1.0", options: .regularExpression)
+
+        let trimmedExpr = e.trimmingCharacters(in: .whitespaces)
+        guard !trimmedExpr.isEmpty else { return nil }
+
+        var resultNum: NSNumber?
+        let ok = ObjCExceptionCatcher.catchException {
+            let parsed = NSExpression(format: trimmedExpr)
+            resultNum = parsed.expressionValue(with: nil, context: nil) as? NSNumber
+        }
+        guard ok, let result = resultNum else { return nil }
+        let val = result.doubleValue
+        if val.isNaN || val.isInfinite { return nil }
+        return val
+    }
+
     // MARK: - Standard Math Expression
 
     private static func evaluateExpression(_ input: String) -> (expression: String, result: String)? {
-        // Pre-process
-        var expr = input
+        // Pre-process: convert x/X to * first so abbreviations hit a word boundary (e.g. "2kx10" -> "2k*10")
+        var expr = input.replacingOccurrences(
+            of: #"([\d\w)])\s*[xX]\s*([\d.(])"#,
+            with: "$1*$2",
+            options: .regularExpression
+        )
+        expr = expandAbbreviations(expr)
         // Strip stray currency symbols that aren't part of a valid currency pattern
         expr = expr.replacingOccurrences(of: #"[\$€£¥₪]"#, with: "", options: .regularExpression)
         // √25 or √ 25 or √(25) -> sqrt(25)
@@ -821,12 +1021,6 @@ struct MathEvaluator {
         expr = expr.replacingOccurrences(
             of: #"√\s*([\d.]+)"#,
             with: "sqrt($1)",
-            options: .regularExpression
-        )
-        // x/X as multiplication: between numbers, after ), before (
-        expr = expr.replacingOccurrences(
-            of: #"([\d)])\s*[xX]\s*([\d(])"#,
-            with: "$1*$2",
             options: .regularExpression
         )
         expr = expr.replacingOccurrences(of: "^", with: "**")
@@ -873,7 +1067,84 @@ struct MathEvaluator {
             return (expression: input, result: "Error")
         }
         guard let formatted = formatter.string(from: result) else { return nil }
+
+        // If the original input had a leading currency symbol, prefix the result and round to 2 decimals
+        if let first = input.trimmingCharacters(in: CharacterSet(charactersIn: "( ")).first,
+           "$€£¥₪".contains(first) {
+            let currencyFmt = NumberFormatter()
+            currencyFmt.numberStyle = .decimal
+            currencyFmt.minimumFractionDigits = 2
+            currencyFmt.maximumFractionDigits = 2
+            currencyFmt.usesGroupingSeparator = true
+            let rounded = currencyFmt.string(from: NSNumber(value: doubleVal)) ?? formatted
+            return (expression: input, result: String(first) + rounded)
+        }
         return (expression: input, result: formatted)
+    }
+
+    // MARK: - Standalone Abbreviation
+
+    private static func evaluateAbbreviation(_ input: String) -> (expression: String, result: String)? {
+        let s = input.lowercased().replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespaces)
+        let pattern = #"^([\d.]+)\s*(k|mil|milion|million|m|billion|bil|b|trillion|tril|t)$"#
+        guard s.range(of: pattern, options: .regularExpression) != nil,
+              let value = parseNumber(s), value != Double(s) else { return nil }
+        return (expression: input, result: format(value))
+    }
+
+    // MARK: - Number Abbreviation Parsing
+
+    /// Parses a numeric string, expanding abbreviations like "5k", "2.5mil", "1billion"
+    private static func parseNumber(_ str: String) -> Double? {
+        let s = str.lowercased().trimmingCharacters(in: .whitespaces)
+        // Match: optional number followed by abbreviation suffix
+        let pattern = #"^([\d,.]+)\s*(k|mil|milion|million|m|billion|bil|b|trillion|tril|t)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+              let numRange = Range(match.range(at: 1), in: s),
+              let suffRange = Range(match.range(at: 2), in: s) else {
+            return Double(str)
+        }
+        let numStr = String(s[numRange]).replacingOccurrences(of: ",", with: "")
+        let suffix = String(s[suffRange])
+        guard let base = Double(numStr) else { return nil }
+        switch suffix {
+        case "k": return base * 1_000
+        case "m", "mil", "milion", "million": return base * 1_000_000
+        case "b", "bil", "billion": return base * 1_000_000_000
+        case "t", "tril", "trillion": return base * 1_000_000_000_000
+        default: return base
+        }
+    }
+
+    /// Expands abbreviations inline within an expression string (e.g. "5k + 2m" -> "5000 + 2000000")
+    private static func expandAbbreviations(_ expr: String) -> String {
+        let pattern = #"(\d[\d,.]*)\s*(k|mil|milion|million|billion|bil|trillion|tril)\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return expr }
+        var result = expr
+        // Process matches from end to preserve ranges
+        let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
+        for match in matches.reversed() {
+            guard let fullRange = Range(match.range, in: result),
+                  let numRange = Range(match.range(at: 1), in: result),
+                  let suffRange = Range(match.range(at: 2), in: result) else { continue }
+            let numStr = String(result[numRange]).replacingOccurrences(of: ",", with: "")
+            let suffix = String(result[suffRange]).lowercased()
+            guard let base = Double(numStr) else { continue }
+            let multiplier: Double
+            switch suffix {
+            case "k": multiplier = 1_000
+            case "m", "mil", "milion", "million": multiplier = 1_000_000
+            case "b", "bil", "billion": multiplier = 1_000_000_000
+            case "t", "tril", "trillion": multiplier = 1_000_000_000_000
+            default: continue
+            }
+            let expanded = base * multiplier
+            // Use integer format if whole number
+            let expandedStr = expanded == expanded.rounded() ? String(Int(expanded)) : String(expanded)
+            result.replaceSubrange(fullRange, with: expandedStr)
+        }
+        return result
     }
 
     // MARK: - Formatting

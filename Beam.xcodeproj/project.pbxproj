@@ -31,6 +31,7 @@
 		A10022 /* DictionarySearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10025; };
 		A10023 /* EmojiSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026; };
 		A10024 /* TimeZoneSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027; };
+		A10025 /* HistoryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +62,7 @@
 		B10025 /* DictionarySearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictionarySearcher.swift; sourceTree = "<group>"; };
 		B10026 /* EmojiSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiSearcher.swift; sourceTree = "<group>"; };
 		B10027 /* TimeZoneSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeZoneSearcher.swift; sourceTree = "<group>"; };
+		B10028 /* HistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryManager.swift; sourceTree = "<group>"; };
 		P10001 /* Beam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Beam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -129,6 +131,7 @@
 				B10025 /* DictionarySearcher.swift */,
 				B10026 /* EmojiSearcher.swift */,
 				B10027 /* TimeZoneSearcher.swift */,
+				B10028 /* HistoryManager.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -265,6 +268,7 @@
 				A10022 /* DictionarySearcher.swift in Sources */,
 				A10023 /* EmojiSearcher.swift in Sources */,
 				A10024 /* TimeZoneSearcher.swift in Sources */,
+				A10025 /* HistoryManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

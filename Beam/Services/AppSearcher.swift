@@ -77,8 +77,12 @@ class AppSearcher {
                     subtitle: appUrl.path,
                     icon: app.icon,
                     actions: [
-                        ResultAction(name: "Open") { NSWorkspace.shared.open(appUrl) },
+                        ResultAction(name: "Open") {
+                            AppDelegate.shared?.dismissPanel(skipReactivation: true)
+                            NSWorkspace.shared.open(appUrl)
+                        },
                         ResultAction(name: "Reveal in Finder") {
+                            AppDelegate.shared?.dismissPanel(skipReactivation: true)
                             NSWorkspace.shared.selectFile(appUrl.path, inFileViewerRootedAtPath: "")
                         },
                     ]

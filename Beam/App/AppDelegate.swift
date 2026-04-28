@@ -140,13 +140,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func dismissPanel() {
+    func dismissPanel(skipReactivation: Bool = false) {
         searchCoordinator.saveAndClear()
         panel?.orderOut(nil)
-        if let app = previousApp, !app.isTerminated {
+        if !skipReactivation, let app = previousApp, !app.isTerminated {
             app.activate()
         }
         previousApp = nil
+    }
+
+    /// Copy text to clipboard, dismiss the panel, reactivate the previous app, and paste.
+    func insertTextIntoPreviousApp(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        let app = previousApp
+        searchCoordinator.saveAndClear()
+        panel?.orderOut(nil)
+        previousApp = nil
+        guard let target = app, !target.isTerminated else { return }
+        target.activate()
+        // Give the OS a moment to switch focus before synthesizing Cmd+V.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            Self.postCommandV()
+        }
+    }
+
+    private static func postCommandV() {
+        guard let src = CGEventSource(stateID: .combinedSessionState) else { return }
+        let vKey: CGKeyCode = 0x09 // kVK_ANSI_V
+        let down = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: true)
+        let up = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: false)
+        down?.flags = .maskCommand
+        up?.flags = .maskCommand
+        down?.post(tap: .cgAnnotatedSessionEventTap)
+        up?.post(tap: .cgAnnotatedSessionEventTap)
     }
 
     // MARK: - Settings

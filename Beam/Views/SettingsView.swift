@@ -15,7 +15,7 @@ struct SettingsView: View {
             ActionsSettingsTab(settings: settings)
                 .tabItem { Label("Actions", systemImage: "hand.tap") }
         }
-        .frame(width: 480, height: 480)
+        .frame(width: 480, height: 620)
     }
 }
 
@@ -25,6 +25,8 @@ struct GeneralSettingsTab: View {
     @Binding var isRecordingHistoryShortcut: Bool
     @Binding var isRecordingExpandShortcut: Bool
     @Binding var isRecordingCollapseShortcut: Bool
+    @State private var ollamaModels: [String] = []
+    @State private var loadingModels: Bool = false
 
     var body: some View {
         Form {
@@ -86,6 +88,34 @@ struct GeneralSettingsTab: View {
                 }
             }
 
+            Section("Ask AI") {
+                HStack {
+                    Text("Model")
+                    Spacer()
+                    if loadingModels {
+                        ProgressView().controlSize(.small)
+                    } else if ollamaModels.isEmpty {
+                        Text("No models found").foregroundStyle(.secondary).font(.caption)
+                    } else {
+                        Picker("", selection: $settings.ollamaModel) {
+                            Text("Auto").tag("")
+                            ForEach(ollamaModels, id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 240)
+                    }
+                    Button(action: refreshModels) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                Text("\"Auto\" picks the first model Ollama returns. Refresh after installing new models with `ollama pull`.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Display") {
                 Picker("Default Result View", selection: $settings.resultDisplayMode) {
                     ForEach(ResultDisplayMode.allCases, id: \.self) { mode in
@@ -123,7 +153,7 @@ struct GeneralSettingsTab: View {
                         }
                     }
                     .listStyle(.bordered)
-                    .frame(height: 220)
+                    .frame(minHeight: 320)
 
                     Button("Reset to Default") {
                         settings.sectionOrder = SettingsManager.defaultSectionOrder
@@ -133,12 +163,24 @@ struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { refreshModels() }
+    }
+
+    private func refreshModels() {
+        loadingModels = true
+        Task {
+            let models = await OllamaSearcher.shared.listModels()
+            await MainActor.run {
+                ollamaModels = models
+                loadingModels = false
+            }
+        }
     }
 }
 
 struct ActionsSettingsTab: View {
     @ObservedObject var settings: SettingsManager
-    private let types: [SearchResultType] = [.math, .app, .contact, .file, .shortcut, .definition, .reminder, .calendar, .emoji, .timezone]
+    private let types: [SearchResultType] = [.math, .app, .contact, .file, .shortcut, .definition, .reminder, .calendar, .emoji, .unicode, .timezone, .ai]
 
     var body: some View {
         ScrollView {

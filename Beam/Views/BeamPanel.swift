@@ -94,9 +94,12 @@ class BeamPanel: NSPanel {
         let currentFrame = frame
         let y = currentFrame.origin.y + currentFrame.height - newHeight
         let newFrame = NSRect(x: currentFrame.origin.x, y: y, width: currentFrame.width, height: newHeight)
+        // Larger jumps (entering/leaving chat mode) get a longer spring-y animation.
+        let delta = abs(newHeight - currentFrame.height)
+        let duration = delta > 200 ? 0.42 : 0.15
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 0.97, 0.6, 1.0)
             animator().setFrame(newFrame, display: true)
         }
     }

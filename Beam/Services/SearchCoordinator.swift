@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 
 struct MathResultInfo: Equatable {
     let expression: String
@@ -20,6 +21,86 @@ class SearchCoordinator {
     var expandedResultId: UUID? = nil
     var expandedDetailIndex: Int? = nil
 
+    // Emoji grid
+    static let emojiGridColumns = 8
+
+    private static let gridTypes: Set<SearchResultType> = [.emoji, .unicode]
+
+    var hasEmojiResults: Bool {
+        results.contains(where: { Self.gridTypes.contains($0.type) })
+    }
+
+    /// True when the currently selected result is a grid item (emoji or unicode)
+    var isSelectedEmoji: Bool {
+        guard selectedIndex >= 0, selectedIndex < results.count else { return false }
+        return Self.gridTypes.contains(results[selectedIndex].type)
+    }
+
+    /// Indices of grid-type results in the results array
+    var emojiIndices: [Int] {
+        results.enumerated().compactMap { Self.gridTypes.contains($0.element.type) ? $0.offset : nil }
+    }
+
+    /// All results are grid-type (panel height)
+    var isEmojiGridMode: Bool {
+        !results.isEmpty && results.allSatisfy { Self.gridTypes.contains($0.type) }
+    }
+
+    // Chat (Ask AI)
+    struct ChatMessage: Identifiable, Equatable {
+        let id = UUID()
+        let role: String // "user" or "assistant"
+        var content: String
+    }
+    var isChatMode: Bool = false
+    var chatMessages: [ChatMessage] = []
+    var chatModel: String = ""
+    var chatStreaming: Bool = false
+
+    func enterChatMode(prompt: String) {
+        let model = OllamaSearcher.shared.currentModel
+        chatMessages = [ChatMessage(role: "user", content: prompt)]
+        chatModel = model
+        chatStreaming = true
+        isChatMode = true
+        appendAssistantPlaceholder()
+        OllamaSearcher.shared.chat(messages: chatMessages.dropLast().map { ($0.role, $0.content) }) { [weak self] token in
+            self?.appendAssistantToken(token)
+        } completion: { [weak self] in
+            self?.chatStreaming = false
+        }
+    }
+
+    func sendChatMessage(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !chatStreaming else { return }
+        chatMessages.append(ChatMessage(role: "user", content: trimmed))
+        chatStreaming = true
+        appendAssistantPlaceholder()
+        let history = chatMessages.dropLast().map { ($0.role, $0.content) }
+        OllamaSearcher.shared.chat(messages: history) { [weak self] token in
+            self?.appendAssistantToken(token)
+        } completion: { [weak self] in
+            self?.chatStreaming = false
+        }
+    }
+
+    func exitChatMode() {
+        OllamaSearcher.shared.cancelStreaming()
+        isChatMode = false
+        chatMessages = []
+        chatStreaming = false
+    }
+
+    private func appendAssistantPlaceholder() {
+        chatMessages.append(ChatMessage(role: "assistant", content: ""))
+    }
+
+    private func appendAssistantToken(_ token: String) {
+        guard let last = chatMessages.indices.last, chatMessages[last].role == "assistant" else { return }
+        chatMessages[last].content += token
+    }
+
     // History
     var isHistoryMode = false
     var historyFilter: SearchResultType? = nil
@@ -38,7 +119,9 @@ class SearchCoordinator {
     private let dictionarySearcher = DictionarySearcher()
     private let emojiSearcher = EmojiSearcher()
     private let timezoneSearcher = TimeZoneSearcher()
+    private let ollamaSearcher = OllamaSearcher.shared
     private var debounceTimer: Timer?
+    private var autoChatTimer: Timer?
     private var suppressDidSet = false
 
     init() {
@@ -47,6 +130,8 @@ class SearchCoordinator {
 
     /// Called from SearchBarView when text changes
     func queryChanged(_ newQuery: String) {
+        autoChatTimer?.invalidate()
+        autoChatTimer = nil
         query = newQuery
         if isHistoryMode && !newQuery.isEmpty {
             exitHistoryMode()
@@ -144,6 +229,8 @@ class SearchCoordinator {
         let actionIdx = SettingsManager.shared.actionIndex(for: result.type, slot: slot)
         let clampedIdx = min(actionIdx, result.actions.count - 1)
         result.actions[max(0, clampedIdx)].handler()
+        // If the action transitioned us into chat mode, keep the panel open.
+        if isChatMode { return false }
         return true
     }
 
@@ -162,12 +249,25 @@ class SearchCoordinator {
     }
 
     func moveUp() {
+        if isSelectedEmoji {
+            let indices = emojiIndices
+            let cols = Self.emojiGridColumns
+            if let pos = indices.firstIndex(of: selectedIndex) {
+                if pos >= cols {
+                    selectedIndex = indices[pos - cols]
+                } else {
+                    // At top row of grid — move to result before the emoji block
+                    let firstEmoji = indices[0]
+                    if firstEmoji > 0 { selectedIndex = firstEmoji - 1 }
+                }
+            }
+            return
+        }
         // If inside expanded details, navigate up through them
         if let detailIdx = expandedDetailIndex {
             if detailIdx > 0 {
                 expandedDetailIndex = detailIdx - 1
             } else {
-                // Back to main row
                 expandedDetailIndex = nil
             }
             return
@@ -179,6 +279,22 @@ class SearchCoordinator {
     }
 
     func moveDown() {
+        if isSelectedEmoji {
+            let indices = emojiIndices
+            let cols = Self.emojiGridColumns
+            if let pos = indices.firstIndex(of: selectedIndex) {
+                if pos + cols < indices.count {
+                    selectedIndex = indices[pos + cols]
+                } else {
+                    // At bottom row of grid — move to result after the emoji block
+                    let lastEmoji = indices.last!
+                    if lastEmoji < results.count - 1 {
+                        selectedIndex = lastEmoji + 1
+                    }
+                }
+            }
+            return
+        }
         // If expanded and on main row (no detail selected), enter details
         if expandedResultId != nil, expandedDetailIndex == nil {
             let result = results[selectedIndex]
@@ -193,7 +309,6 @@ class SearchCoordinator {
             if detailIdx < result.details.count - 1 {
                 expandedDetailIndex = detailIdx + 1
             } else {
-                // Past last detail → collapse and go to next result
                 collapseExpanded()
                 if selectedIndex < results.count - 1 {
                     selectedIndex += 1
@@ -204,6 +319,26 @@ class SearchCoordinator {
         if selectedIndex < results.count - 1 {
             collapseExpanded()
             selectedIndex += 1
+        }
+    }
+
+    func moveLeft() {
+        if isSelectedEmoji {
+            // Move to previous emoji in the grid
+            let indices = emojiIndices
+            if let pos = indices.firstIndex(of: selectedIndex), pos > 0 {
+                selectedIndex = indices[pos - 1]
+            }
+        }
+    }
+
+    func moveRight() {
+        if isSelectedEmoji {
+            // Move to next emoji in the grid
+            let indices = emojiIndices
+            if let pos = indices.firstIndex(of: selectedIndex), pos < indices.count - 1 {
+                selectedIndex = indices[pos + 1]
+            }
         }
     }
 
@@ -430,6 +565,7 @@ class SearchCoordinator {
         let reminders = calendarSearcher.searchReminders(q)
         let emoji = emojiSearcher.search(q)
         let unicode = emojiSearcher.searchUnicode(q)
+        let ai = ollamaSearcher.search(q)
 
         merged.append(contentsOf: timezones)
         merged.append(contentsOf: definitions)
@@ -440,6 +576,7 @@ class SearchCoordinator {
         merged.append(contentsOf: reminders)
         merged.append(contentsOf: emoji)
         merged.append(contentsOf: unicode)
+        merged.append(contentsOf: ai)
 
         if displayMode == .grouped {
             let mathResults = merged.filter { $0.type == .math }
@@ -449,11 +586,35 @@ class SearchCoordinator {
 
         results = merged
         selectedIndex = 0
+        scheduleAutoChat(for: q)
 
         fileSearcher.search(q) { [weak self] fileResults in
             guard let self = self, self.query == q else { return }
             let nonFileResults = self.results.filter { $0.type != .file }
             self.results = nonFileResults + fileResults
+        }
+    }
+
+    /// If the only available result for a query is "Ask AI", auto-transition to chat
+    /// after a short pause so the user doesn't have to press Enter explicitly.
+    private func scheduleAutoChat(for q: String) {
+        autoChatTimer?.invalidate()
+        autoChatTimer = nil
+
+        // Heuristic: query must look intentional (has whitespace, ends with ?, or is long).
+        let trimmed = q.trimmingCharacters(in: .whitespaces)
+        let looksIntentional = trimmed.contains(" ") || trimmed.hasSuffix("?") || trimmed.count >= 12
+        guard looksIntentional else { return }
+
+        autoChatTimer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: false) { [weak self] _ in
+            guard let self = self,
+                  self.query == q,
+                  !self.isChatMode,
+                  self.results.count == 1,
+                  self.results.first?.type == .ai else { return }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+                self.enterChatMode(prompt: q)
+            }
         }
     }
 }

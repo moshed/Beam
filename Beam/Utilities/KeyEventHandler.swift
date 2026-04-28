@@ -62,6 +62,19 @@ class KeyCaptureView: NSView {
         let keyCode = event.keyCode
         let flags = event.modifierFlags
 
+        // In chat mode, only handle Esc (to exit). Everything else (Enter, typing,
+        // arrows, etc.) goes to the chat input field via the responder chain.
+        if coordinator.isChatMode {
+            if Int(keyCode) == kVK_Escape {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                    coordinator.exitChatMode()
+                }
+                panel?.makeFocused()
+                return true
+            }
+            return false
+        }
+
         // Check for history shortcut
         let historyCombo = SettingsManager.shared.historyShortcut
         if historyCombo.matches(keyCode: UInt32(keyCode), modifiers: carbonModifiers(from: flags)),
@@ -99,6 +112,18 @@ class KeyCaptureView: NSView {
         }
 
         switch Int(keyCode) {
+        case kVK_LeftArrow:
+            if coordinator.isSelectedEmoji {
+                coordinator.moveLeft()
+                return true
+            }
+            return false
+        case kVK_RightArrow:
+            if coordinator.isSelectedEmoji {
+                coordinator.moveRight()
+                return true
+            }
+            return false
         case kVK_DownArrow:
             coordinator.moveDown()
             return true
@@ -123,7 +148,12 @@ class KeyCaptureView: NSView {
             }
             return true
         case kVK_Escape:
-            if coordinator.isHistoryMode {
+            if coordinator.isChatMode {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                    coordinator.exitChatMode()
+                }
+                panel?.makeFocused()
+            } else if coordinator.isHistoryMode {
                 coordinator.exitHistoryMode()
                 panel?.makeFocused()
             } else if !coordinator.query.isEmpty {

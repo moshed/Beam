@@ -42,10 +42,10 @@ class EmojiSearcher {
             for scalar in range {
                 guard let unicode = Unicode.Scalar(scalar) else { continue }
                 let char = String(Character(unicode))
-                // Get the Unicode name
-                if let name = unicode.properties.name?.lowercased(), !name.isEmpty {
-                    results.append((char, name))
-                }
+                guard let name = unicode.properties.name?.lowercased(), !name.isEmpty else { continue }
+                // Filter out characters that can't be rendered (show as ? in box)
+                guard canRender(char) else { continue }
+                results.append((char, name))
             }
         }
 
@@ -63,20 +63,29 @@ class EmojiSearcher {
         }
         guard keyword.count >= 2 else { return [] }
 
-        let matches = emojiData.filter { $0.name.contains(keyword) }
+        let matches = emojiData.filter { matchesKeyword($0.name, keyword) }
 
-        return matches.prefix(8).map { item in
+        return matches.prefix(50).map { item in
             let emoji = item.emoji
-            let name = item.name
+            let name = item.name.capitalized
             return SearchResult(
                 type: .emoji,
-                title: "\(emoji)  \(name.capitalized)",
+                title: "\(emoji)  \(name)",
                 subtitle: "Copy to clipboard",
                 icon: nil,
-                actions: [ResultAction(name: "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(emoji, forType: .string)
-                }]
+                actions: [
+                    ResultAction(name: "Insert") {
+                        AppDelegate.shared?.insertTextIntoPreviousApp(emoji)
+                    },
+                    ResultAction(name: "Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(emoji, forType: .string)
+                    },
+                    ResultAction(name: "Copy name") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(name, forType: .string)
+                    },
+                ]
             )
         }
     }
@@ -86,8 +95,11 @@ class EmojiSearcher {
     func searchUnicode(_ query: String) -> [SearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespaces).lowercased()
 
-        // "unicode <name>" or "u+ <hex>"
+        // "unicode <name>" or "u+ <hex>" — explicit prefixes return up to 50 results
+        // Bare queries (e.g. "arrow", "bullet") also search Unicode but cap at fewer results
+        // to avoid drowning out other categories.
         var keyword: String?
+        var resultLimit = 50
         if trimmed.hasPrefix("unicode ") {
             keyword = String(trimmed.dropFirst(8))
         } else if trimmed.hasPrefix("u+") {
@@ -96,18 +108,34 @@ class EmojiSearcher {
             if let code = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(code) {
                 let char = String(Character(scalar))
                 let name = scalar.properties.name ?? "UNKNOWN"
+                let displayName = name.capitalized
                 return [SearchResult(
-                    type: .emoji,
+                    type: .unicode,
                     title: "\(char)  U+\(hex.uppercased())",
-                    subtitle: name,
+                    subtitle: displayName,
                     icon: nil,
-                    actions: [ResultAction(name: "Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(char, forType: .string)
-                    }]
+                    actions: [
+                        ResultAction(name: "Insert") {
+                            AppDelegate.shared?.insertTextIntoPreviousApp(char)
+                        },
+                        ResultAction(name: "Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(char, forType: .string)
+                        },
+                        ResultAction(name: "Copy name") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(displayName, forType: .string)
+                        },
+                    ]
                 )]
             }
             return []
+        }
+
+        // Fall back to bare query as a Unicode keyword (limited results to keep results clean)
+        if keyword == nil && trimmed.count >= 3 {
+            keyword = trimmed
+            resultLimit = 12
         }
 
         guard let kw = keyword, kw.count >= 2 else { return [] }
@@ -139,25 +167,64 @@ class EmojiSearcher {
         for range in ranges {
             for scalar in range {
                 guard let unicode = Unicode.Scalar(scalar) else { continue }
-                if let name = unicode.properties.name?.lowercased(), name.contains(kw) {
+                if let name = unicode.properties.name?.lowercased(), matchesKeyword(name, kw) {
                     let char = String(Character(unicode))
+                    guard canRender(char) else { continue }
                     let hexCode = String(format: "%04X", scalar)
+                    let displayName = name.capitalized
                     results.append(SearchResult(
-                        type: .emoji,
+                        type: .unicode,
                         title: "\(char)  U+\(hexCode)",
-                        subtitle: name.capitalized,
+                        subtitle: displayName,
                         icon: nil,
-                        actions: [ResultAction(name: "Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(char, forType: .string)
-                        }]
+                        actions: [
+                            ResultAction(name: "Insert") {
+                                AppDelegate.shared?.insertTextIntoPreviousApp(char)
+                            },
+                            ResultAction(name: "Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(char, forType: .string)
+                            },
+                            ResultAction(name: "Copy name") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(displayName, forType: .string)
+                            },
+                        ]
                     ))
                 }
-                if results.count >= 8 { break }
+                if results.count >= resultLimit { break }
             }
-            if results.count >= 8 { break }
+            if results.count >= resultLimit { break }
         }
 
         return results
+    }
+
+    /// Match keyword against name: exact substring OR any word in name starts with the keyword.
+    /// Also tries the singular form (drops trailing 's') so "arrows" matches "ARROW".
+    private func matchesKeyword(_ name: String, _ keyword: String) -> Bool {
+        if checkKeyword(name, keyword) { return true }
+        if keyword.count > 3 && keyword.hasSuffix("s") {
+            return checkKeyword(name, String(keyword.dropLast()))
+        }
+        return false
+    }
+
+    private func checkKeyword(_ name: String, _ keyword: String) -> Bool {
+        if name.contains(keyword) { return true }
+        let words = name.components(separatedBy: .whitespaces)
+        return words.contains(where: { $0.hasPrefix(keyword) })
+    }
+
+    /// Check if a character can be rendered by the system (not shown as ? in box)
+    private func canRender(_ str: String) -> Bool {
+        var unichars = Array(str.utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: unichars.count)
+        // Try Apple Color Emoji first (for emoji)
+        let emojiFont = CTFontCreateWithName("Apple Color Emoji" as CFString, 12, nil)
+        if CTFontGetGlyphsForCharacters(emojiFont, &unichars, &glyphs, unichars.count) { return true }
+        // Then system font (for unicode symbols)
+        let sysFont = NSFont.systemFont(ofSize: 12) as CTFont
+        return CTFontGetGlyphsForCharacters(sysFont, &unichars, &glyphs, unichars.count)
     }
 }

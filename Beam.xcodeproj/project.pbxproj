@@ -32,6 +32,9 @@
 		A10023 /* EmojiSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10026; };
 		A10024 /* TimeZoneSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10027; };
 		A10025 /* HistoryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10028; };
+		A10026 /* EmojiGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10029; };
+		A10027 /* OllamaSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10030; };
+		A10028 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -63,6 +66,9 @@
 		B10026 /* EmojiSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiSearcher.swift; sourceTree = "<group>"; };
 		B10027 /* TimeZoneSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeZoneSearcher.swift; sourceTree = "<group>"; };
 		B10028 /* HistoryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryManager.swift; sourceTree = "<group>"; };
+		B10029 /* EmojiGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiGridView.swift; sourceTree = "<group>"; };
+		B10030 /* OllamaSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaSearcher.swift; sourceTree = "<group>"; };
+		B10031 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		P10001 /* Beam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Beam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -132,6 +138,7 @@
 				B10026 /* EmojiSearcher.swift */,
 				B10027 /* TimeZoneSearcher.swift */,
 				B10028 /* HistoryManager.swift */,
+				B10030 /* OllamaSearcher.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -145,6 +152,8 @@
 				B10013 /* ResultsListView.swift */,
 				B10014 /* BeamContentView.swift */,
 				B10020 /* SettingsView.swift */,
+				B10029 /* EmojiGridView.swift */,
+				B10031 /* ChatView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -269,6 +278,9 @@
 				A10023 /* EmojiSearcher.swift in Sources */,
 				A10024 /* TimeZoneSearcher.swift in Sources */,
 				A10025 /* HistoryManager.swift in Sources */,
+				A10026 /* EmojiGridView.swift in Sources */,
+				A10027 /* OllamaSearcher.swift in Sources */,
+				A10028 /* ChatView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

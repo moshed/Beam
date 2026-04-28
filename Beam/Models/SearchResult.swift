@@ -10,7 +10,9 @@ enum SearchResultType: String, CaseIterable {
     case shortcut = "Shortcut"
     case definition = "Definition"
     case emoji = "Emoji"
+    case unicode = "Unicode"
     case timezone = "Time Zone"
+    case ai = "Ask AI"
 
     var sectionOrder: Int {
         return SettingsManager.shared.sectionIndex(for: self)
@@ -27,7 +29,9 @@ enum SearchResultType: String, CaseIterable {
         case .shortcut: return "arrow.trianglehead.turn.up.right.diamond.fill"
         case .definition: return "book.closed.fill"
         case .emoji: return "face.smiling"
+        case .unicode: return "textformat.abc"
         case .timezone: return "clock.fill"
+        case .ai: return "sparkles"
         }
     }
 }

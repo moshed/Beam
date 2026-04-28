@@ -3,10 +3,17 @@ import SwiftUI
 struct BeamContentView: View {
     @Bindable var coordinator: SearchCoordinator
     weak var panel: BeamPanel?
+    @Namespace private var chatTransitionNs
 
     var body: some View {
         VStack(spacing: 0) {
-            if coordinator.isHistoryMode {
+            if coordinator.isChatMode {
+                ChatView(coordinator: coordinator, transitionNs: chatTransitionNs)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeOut(duration: 0.25).delay(0.05)),
+                        removal: .opacity.animation(.easeIn(duration: 0.15))
+                    ))
+            } else if coordinator.isHistoryMode {
                 // History header — no text field
                 HStack(spacing: 10) {
                     Image(systemName: "clock.arrow.circlepath")
@@ -57,15 +64,16 @@ struct BeamContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
+                .matchedGeometryEffect(id: "chatQueryBubble", in: chatTransitionNs, anchor: .center, isSource: true)
             }
 
             // History filter bar
-            if coordinator.isHistoryMode && !coordinator.results.isEmpty {
+            if !coordinator.isChatMode && coordinator.isHistoryMode && !coordinator.results.isEmpty {
                 historyFilterBar
             }
 
             // Results
-            if !coordinator.results.isEmpty {
+            if !coordinator.isChatMode && !coordinator.results.isEmpty {
                 if !coordinator.isHistoryMode {
                     // Toggle bar (normal mode only)
                     HStack {
@@ -107,8 +115,10 @@ struct BeamContentView: View {
                         expandedDetailIndex: coordinator.expandedDetailIndex,
                         onSelect: { index in
                             coordinator.selectedIndex = index
-                            coordinator.executeFocusedAction(slot: 0)
-                            AppDelegate.shared?.dismissPanel()
+                            let shouldDismiss = coordinator.executeFocusedAction(slot: 0)
+                            if shouldDismiss {
+                                AppDelegate.shared?.dismissPanel()
+                            }
                         }
                     )
                 } else {
@@ -146,6 +156,9 @@ struct BeamContentView: View {
             updatePanelHeight(coordinator.results.count)
         }
         .onChange(of: coordinator.expandedResultId) { _, _ in
+            updatePanelHeight(coordinator.results.count)
+        }
+        .onChange(of: coordinator.isChatMode) { _, _ in
             updatePanelHeight(coordinator.results.count)
         }
         .background(KeyEventHandlerView(coordinator: coordinator, panel: panel))
@@ -187,15 +200,22 @@ struct BeamContentView: View {
         let actions = coordinator.focusedActions
         guard !actions.isEmpty else { return "" }
 
+        let idx = coordinator.selectedIndex
+        guard idx >= 0, idx < coordinator.results.count else { return "" }
+        let result = coordinator.results[idx]
+
+        // Emoji/unicode grid: show name + action hints
+        if coordinator.isSelectedEmoji {
+            let afterChar = String(result.title.dropFirst()).trimmingCharacters(in: .whitespaces)
+            let name = afterChar.hasPrefix("U+") && !result.subtitle.isEmpty ? result.subtitle : afterChar
+            return "\(name)   ↵ Copy   ⇧↵ Copy name"
+        }
+
         // For detail items, use actions directly (no per-type customization)
         if coordinator.expandedDetailIndex != nil {
             let keys = ["↵", "⇧↵", "⌥↵"]
             return (0..<min(3, actions.count)).map { "\(keys[$0]) \(actions[$0].name)" }.joined(separator: "   ")
         }
-
-        let idx = coordinator.selectedIndex
-        guard idx >= 0, idx < coordinator.results.count else { return "" }
-        let result = coordinator.results[idx]
         let settings = SettingsManager.shared
         let keys = ["↵", "⇧↵", "⌥↵"]
         var parts: [String] = []
@@ -208,17 +228,35 @@ struct BeamContentView: View {
     }
 
     private func updatePanelHeight(_ count: Int) {
+        if coordinator.isChatMode {
+            panel?.updateHeight(520)
+            return
+        }
         let searchBarHeight: CGFloat = 56
+        let hasResults = count > 0
         let rowHeight: CGFloat = 44
         let detailRowHeight: CGFloat = 22
-        let hasResults = count > 0
 
         // History filter bar height
         let historyFilterHeight: CGFloat = (coordinator.isHistoryMode && hasResults) ? 30 : 0
 
         let toggleBarHeight: CGFloat = (!coordinator.isHistoryMode && hasResults) ? 24.0 : 0
         let dividerPadding: CGFloat = hasResults ? 13.0 : 0
-        let rows = CGFloat(min(count, 15))
+
+        // Count non-grid rows and grid rows separately
+        let gridTypes: Set<SearchResultType> = [.emoji, .unicode]
+        let emojiCount = coordinator.results.filter { gridTypes.contains($0.type) }.count
+        let nonEmojiCount = coordinator.results.filter { !gridTypes.contains($0.type) }.count
+        let nonEmojiRows = CGFloat(min(nonEmojiCount, 15))
+
+        var emojiGridHeight: CGFloat = 0
+        if emojiCount > 0 {
+            let cols = SearchCoordinator.emojiGridColumns
+            let gridRows = ceil(CGFloat(emojiCount) / CGFloat(cols))
+            emojiGridHeight = min(gridRows * 60 + 8, 320)
+        }
+
+        let rows = nonEmojiRows
 
         // In grouped mode (non-history), count section headers
         var sectionHeaderHeight: CGFloat = 0
@@ -236,7 +274,7 @@ struct BeamContentView: View {
         }
 
         let listPadding: CGFloat = hasResults ? 8.0 : 0
-        let totalHeight = searchBarHeight + historyFilterHeight + toggleBarHeight + dividerPadding + rows * rowHeight + sectionHeaderHeight + expandedHeight + listPadding
+        let totalHeight = searchBarHeight + historyFilterHeight + toggleBarHeight + dividerPadding + rows * rowHeight + sectionHeaderHeight + expandedHeight + emojiGridHeight + listPadding
         panel?.updateHeight(totalHeight)
     }
 }

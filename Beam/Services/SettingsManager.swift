@@ -70,8 +70,10 @@ struct CategoryActions {
         .reminder: ["Open in Reminders", "Mark complete", "Postpone due date"],
         .shortcut: ["Run", "Open in Shortcuts"],
         .definition: ["Copy definition", "Copy word"],
-        .emoji: ["Copy"],
+        .emoji: ["Insert", "Copy", "Copy name"],
+        .unicode: ["Insert", "Copy", "Copy name"],
         .timezone: ["Copy time"],
+        .ai: ["Ask", "Copy answer"],
     ]
 }
 
@@ -112,6 +114,11 @@ class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(reminderDueDateOffsetMinutes, forKey: "reminderDueDateOffsetMinutes") }
     }
 
+    /// Default Ollama model name. Empty string = auto-pick first available.
+    @Published var ollamaModel: String {
+        didSet { UserDefaults.standard.set(ollamaModel, forKey: "ollamaModel") }
+    }
+
     /// Section ordering for grouped mode
     @Published var sectionOrder: [String] {
         didSet {
@@ -123,7 +130,7 @@ class SettingsManager: ObservableObject {
 
     static let defaultSectionOrder: [String] = [
         "Math", "Time Zone", "Definition", "App", "Shortcut",
-        "Contact", "Calendar", "Reminder", "Emoji", "File"
+        "Contact", "Calendar", "Reminder", "Emoji", "Unicode", "File", "Ask AI"
     ]
 
     func sectionIndex(for type: SearchResultType) -> Int {
@@ -166,9 +173,14 @@ class SettingsManager: ObservableObject {
         }
 
         self.reminderDueDateOffsetMinutes = UserDefaults.standard.object(forKey: "reminderDueDateOffsetMinutes") as? Int ?? 30
+        self.ollamaModel = UserDefaults.standard.string(forKey: "ollamaModel") ?? ""
 
         if let data = UserDefaults.standard.data(forKey: "sectionOrder"),
-           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+           var decoded = try? JSONDecoder().decode([String].self, from: data) {
+            // Add any new types that aren't in the saved order
+            for typeName in SettingsManager.defaultSectionOrder where !decoded.contains(typeName) {
+                decoded.append(typeName)
+            }
             self.sectionOrder = decoded
         } else {
             self.sectionOrder = SettingsManager.defaultSectionOrder

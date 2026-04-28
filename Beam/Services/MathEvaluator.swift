@@ -286,6 +286,61 @@ struct MathEvaluator {
     private static func evaluateDate(_ input: String) -> (expression: String, result: String)? {
         let lower = input.lowercased().trimmingCharacters(in: .whitespaces)
 
+        // "<date> + X unit [+/- Y unit ...]" — chained date arithmetic
+        // e.g. "9/1 + 85 days", "today + 10 years + 364 days", "sep 1 + 1 month - 5 days"
+        // Single op with no date prefix (e.g. "+ 85 days") falls through to the relative-to-today block below.
+        let trimmedInput = input.trimmingCharacters(in: .whitespaces)
+        let opPattern = #"([+\-])\s*(\d+\.?\d*)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|yrs?)"#
+        if let regex = try? NSRegularExpression(pattern: opPattern, options: [.caseInsensitive]) {
+            let nsInput = trimmedInput as NSString
+            let opMatches = regex.matches(in: trimmedInput, range: NSRange(location: 0, length: nsInput.length))
+            if !opMatches.isEmpty {
+                let lastEnd = opMatches.last!.range.location + opMatches.last!.range.length
+                let trailing = nsInput.substring(from: lastEnd).trimmingCharacters(in: .whitespaces)
+                var contiguous = trailing.isEmpty
+                for i in 1..<opMatches.count where contiguous {
+                    let prevEnd = opMatches[i-1].range.location + opMatches[i-1].range.length
+                    let between = nsInput.substring(with: NSRange(location: prevEnd, length: opMatches[i].range.location - prevEnd))
+                    if !between.trimmingCharacters(in: .whitespaces).isEmpty { contiguous = false }
+                }
+                let baseStr = nsInput.substring(to: opMatches[0].range.location).trimmingCharacters(in: .whitespaces)
+                if contiguous && (opMatches.count > 1 || !baseStr.isEmpty) {
+                    let baseDate: Date? = baseStr.isEmpty ? Date() : parseDate(baseStr)
+                    if let baseDate {
+                        var current = baseDate
+                        var showTime = false
+                        let calendar = Calendar.current
+                        var failed = false
+                        for m in opMatches {
+                            let matched = nsInput.substring(with: m.range).trimmingCharacters(in: .whitespaces)
+                            let isNeg = matched.hasPrefix("-")
+                            let afterSign = String(matched.dropFirst()).trimmingCharacters(in: .whitespaces)
+                            let parts = afterSign.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                            guard parts.count >= 2, let amount = Double(parts[0]) else { failed = true; break }
+                            let unit = parts.dropFirst().joined(separator: " ").lowercased()
+                            let value = Int(amount) * (isNeg ? -1 : 1)
+                            var stepped: Date?
+                            if unit.hasPrefix("sec") { stepped = calendar.date(byAdding: .second, value: value, to: current); showTime = true }
+                            else if unit.hasPrefix("min") { stepped = calendar.date(byAdding: .minute, value: value, to: current); showTime = true }
+                            else if unit.hasPrefix("hour") || unit.hasPrefix("hr") { stepped = calendar.date(byAdding: .hour, value: value, to: current); showTime = true }
+                            else if unit.hasPrefix("day") { stepped = calendar.date(byAdding: .day, value: value, to: current) }
+                            else if unit.hasPrefix("week") { stepped = calendar.date(byAdding: .weekOfYear, value: value, to: current) }
+                            else if unit.hasPrefix("month") { stepped = calendar.date(byAdding: .month, value: value, to: current) }
+                            else if unit.hasPrefix("year") || unit.hasPrefix("yr") { stepped = calendar.date(byAdding: .year, value: value, to: current) }
+                            guard let s = stepped else { failed = true; break }
+                            current = s
+                        }
+                        if !failed {
+                            let fmt = DateFormatter()
+                            fmt.dateStyle = .long
+                            fmt.timeStyle = showTime ? .short : .none
+                            return (expression: input, result: fmt.string(from: current))
+                        }
+                    }
+                }
+            }
+        }
+
         // "+ X days/hours/minutes/months/years" or "- X days/hours/minutes/months/years"
         if let _ = lower.range(of: #"^[+\-]\s*(\d+\.?\d*)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|yrs?)$"#, options: .regularExpression) {
             let isNegative = lower.hasPrefix("-")
@@ -492,28 +547,150 @@ struct MathEvaluator {
 
     // MARK: - Unit Conversions
 
+    /// All known normalized unit keys
+    private static let allKnownUnits: Set<String> = [
+        "mm", "cm", "m", "km", "in", "ft", "yd", "mi", "nmi",
+        "mg", "g", "kg", "tonne", "oz", "lb", "st", "ton",
+        "ml", "l", "gal", "qt", "pt", "cup", "floz", "tbsp", "tsp",
+        "c", "f", "k",
+        "mps", "kph", "kmh", "mph", "knots", "fps",
+        "sqm", "sqkm", "sqft", "sqmi", "sqyd", "sqin", "acre", "hectare", "ha",
+        "cumm", "cucm", "cum", "cukm", "cuin", "cuft", "cuyd",
+        "ms", "sec", "s", "min", "hr", "h", "day", "week", "month", "year",
+        "b", "kb", "mb", "gb", "tb", "pb",
+    ]
+
+    private static func isKnownUnit(_ str: String) -> Bool {
+        allKnownUnits.contains(normalizeUnit(str))
+    }
+
+    /// Try to find a known unit at the end of a string, return (expression, unitName) or nil
+    private static func splitExprAndUnit(_ str: String) -> (expr: String, unit: String)? {
+        let trimmed = str.trimmingCharacters(in: .whitespaces)
+
+        // Try progressively longer suffixes (up to 3 words) as unit names
+        let words = trimmed.components(separatedBy: " ").filter { !$0.isEmpty }
+        for count in 1...min(3, words.count) {
+            let unitCandidate = words.suffix(count).joined(separator: " ")
+            if isKnownUnit(unitCandidate) {
+                let exprPart = words.dropLast(count).joined(separator: " ")
+                return (exprPart, unitCandidate)
+            }
+        }
+
+        // Try splitting number from attached unit: "100km", "5.5ft"
+        if words.count == 1 {
+            let word = trimmed
+            if let match = word.range(of: #"^([\d.,]+)\s*([a-zA-Z°]+.*)$"#, options: .regularExpression) {
+                let matched = String(word[match])
+                let regex = try! NSRegularExpression(pattern: #"^([\d.,]+)\s*([a-zA-Z°]+.*)$"#)
+                let nsRange = NSRange(matched.startIndex..., in: matched)
+                if let r = regex.firstMatch(in: matched, range: nsRange),
+                   let numRange = Range(r.range(at: 1), in: matched),
+                   let unitRange = Range(r.range(at: 2), in: matched) {
+                    let unit = String(matched[unitRange])
+                    if isKnownUnit(unit) {
+                        return (String(matched[numRange]), unit)
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    /// Evaluate a math expression string to a Double (handles x as multiply, parens, etc.)
+    private static func evalMathToDouble(_ expr: String) -> Double? {
+        var e = expr.trimmingCharacters(in: .whitespaces)
+        guard !e.isEmpty else { return nil }
+
+        // If it's just a number, parse directly
+        if let v = parseNumber(e.replacingOccurrences(of: ",", with: "")) { return v }
+
+        // Convert x/X to *
+        while let range = e.range(of: #"([\d)])\s*[xX]\s*(?=[\d.(])"#, options: .regularExpression) {
+            let matched = String(e[range])
+            let replacement = String(matched.prefix(while: { $0 != "x" && $0 != "X" })) + "*"
+            e.replaceSubrange(range, with: replacement)
+        }
+
+        e = e.replacingOccurrences(of: "^", with: "**")
+
+        // Force float division
+        e = e.replacingOccurrences(
+            of: #"(?<![.\d])(\d+)(?![\d.])"#,
+            with: "$1.0",
+            options: .regularExpression
+        )
+
+        var resultNum: NSNumber?
+        let ok = ObjCExceptionCatcher.catchException {
+            let parsed = NSExpression(format: e)
+            resultNum = parsed.expressionValue(with: nil, context: nil) as? NSNumber
+        }
+        guard ok, let num = resultNum else { return nil }
+        let val = num.doubleValue
+        if val.isNaN || val.isInfinite { return nil }
+        return val
+    }
+
     private static func evaluateUnitConversion(_ input: String) -> (expression: String, result: String)? {
         let lower = input.lowercased()
 
-        // Pattern: "<number><unit> to/in <unit>" (space between number and unit is optional)
-        let pattern = #"^([\d.,]+)\s*(.+?)\s+(?:to|in|as)\s+(.+)$"#
-        guard let match = lower.range(of: pattern, options: .regularExpression) else {
-            return nil
+        // Split on " to " or " as " to find target unit
+        var leftSide: String?
+        var toUnit: String?
+
+        for sep in [" to ", " as "] {
+            if let range = lower.range(of: sep, options: .backwards) {
+                let right = String(lower[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if isKnownUnit(right) {
+                    leftSide = String(lower[lower.startIndex..<range.lowerBound])
+                    toUnit = right
+                    break
+                }
+            }
         }
 
-        let matched = String(lower[match])
-        let regex = try! NSRegularExpression(pattern: pattern)
-        let nsRange = NSRange(matched.startIndex..., in: matched)
-        guard let result = regex.firstMatch(in: matched, range: nsRange) else { return nil }
+        guard let left = leftSide, let target = toUnit else { return nil }
 
-        let numStr = String(matched[Range(result.range(at: 1), in: matched)!]).replacingOccurrences(of: ",", with: "")
-        let fromUnit = String(matched[Range(result.range(at: 2), in: matched)!]).trimmingCharacters(in: .whitespaces)
-        let toUnit = String(matched[Range(result.range(at: 3), in: matched)!]).trimmingCharacters(in: .whitespaces)
+        // From the left side, extract source unit and expression
+        guard let (exprStr, fromUnit) = splitExprAndUnit(left) else { return nil }
 
-        guard let value = parseNumber(numStr) else { return nil }
+        let fromNorm = normalizeUnit(fromUnit)
+        let toNorm = normalizeUnit(target)
 
-        if let converted = convert(value, from: fromUnit, to: toUnit) {
-            return (expression: input, result: "\(format(converted)) \(toUnit)")
+        // Series: comma-separated or space-separated bare numbers → convert each
+        let seriesParts: [String]
+        if exprStr.contains(",") && !exprStr.contains("(") {
+            seriesParts = exprStr.components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        } else {
+            // Check if it's space-separated bare numbers (no operators)
+            let tokens = exprStr.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            if tokens.count >= 2 && tokens.allSatisfy({ parseNumber($0.replacingOccurrences(of: ",", with: "")) != nil }) {
+                seriesParts = tokens
+            } else {
+                seriesParts = []
+            }
+        }
+
+        if !seriesParts.isEmpty {
+            var results: [String] = []
+            for part in seriesParts {
+                guard let val = evalMathToDouble(part),
+                      let conv = convert(val, from: fromNorm, to: toNorm) else { return nil }
+                results.append(format(conv))
+            }
+            return (expression: input, result: "\(results.joined(separator: ", ")) \(target)")
+        }
+
+        // Evaluate expression as math, then convert
+        guard let value = evalMathToDouble(exprStr) else { return nil }
+
+        if let converted = convert(value, from: fromNorm, to: toNorm) {
+            return (expression: input, result: "\(format(converted)) \(target)")
         }
         return nil
     }
@@ -1004,12 +1181,16 @@ struct MathEvaluator {
 
     private static func evaluateExpression(_ input: String) -> (expression: String, result: String)? {
         // Pre-process: convert x/X to * first so abbreviations hit a word boundary (e.g. "2kx10" -> "2k*10")
-        var expr = input.replacingOccurrences(
-            of: #"([\d\w)])\s*[xX]\s*([\d.(])"#,
-            with: "$1*$2",
-            options: .regularExpression
-        )
+        var expr = input
+        // Convert x/X to * (multiply) — use loop since matches can overlap (e.g. "2x3x4")
+        while let range = expr.range(of: #"([\d\w)])\s*[xX]\s*(?=[\d.(])"#, options: .regularExpression) {
+            let matched = String(expr[range])
+            let replacement = String(matched.prefix(while: { $0 != "x" && $0 != "X" })) + "*"
+            expr.replaceSubrange(range, with: replacement)
+        }
         expr = expandAbbreviations(expr)
+        // Strip thousands-separator commas (digit,digit patterns)
+        expr = expr.replacingOccurrences(of: #"(\d),(\d)"#, with: "$1$2", options: .regularExpression)
         // Strip stray currency symbols that aren't part of a valid currency pattern
         expr = expr.replacingOccurrences(of: #"[\$€£¥₪]"#, with: "", options: .regularExpression)
         // √25 or √ 25 or √(25) -> sqrt(25)
@@ -1103,7 +1284,7 @@ struct MathEvaluator {
               let match = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
               let numRange = Range(match.range(at: 1), in: s),
               let suffRange = Range(match.range(at: 2), in: s) else {
-            return Double(str)
+            return Double(str.replacingOccurrences(of: ",", with: ""))
         }
         let numStr = String(s[numRange]).replacingOccurrences(of: ",", with: "")
         let suffix = String(s[suffRange])

@@ -5,18 +5,7 @@
     <link>https://github.com/moshed/Beam</link>
     <description>Beam release feed</description>
     <language>en</language>
-      <item>
-      <title>Version 1.0.2</title>
-      <pubDate>Thu, 28 May 2026 07:07:46 +0000</pubDate>
-      <sparkle:version>3</sparkle:version>
-      <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
-      <description><![CDATA[Fix Sparkle framework embedding so the app launches; add Updates tab with changelog and one-click install]]></description>
-      <enclosure
-        url="https://github.com/moshed/Beam/releases/download/v1.0.2/Beam.zip"
-        type="application/octet-stream"
-        sparkle:edSignature="3LKfXxWWY6oMkfKyytKquLsDfzvZCALQ+iKxBMVcSVoU+xI9NnKbD8HJtrYHGxaXuxYmN3w/RvWtq+7XqTlTCg==" length="1911175"/>
-    </item>
-      <item>
+    <item>
       <title>Version 1.0.3</title>
       <pubDate>Thu, 28 May 2026 14:37:05 +0000</pubDate>
       <sparkle:version>4</sparkle:version>
@@ -31,5 +20,16 @@
         type="application/octet-stream"
         sparkle:edSignature="I0yrklzhrboR5JttHYe39mALOlRL7JWgwbKHcwRuJvaJCK17+k0qhg1CmX5avl9ncj0/TdaBbWHY+3lcD2dhCQ==" length="1914853"/>
     </item>
-  </channel>
+    <item>
+      <title>Version 1.0.2</title>
+      <pubDate>Thu, 28 May 2026 07:07:46 +0000</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
+      <description><![CDATA[Fix Sparkle framework embedding so the app launches; add Updates tab with changelog and one-click install]]></description>
+      <enclosure
+        url="https://github.com/moshed/Beam/releases/download/v1.0.2/Beam.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="3LKfXxWWY6oMkfKyytKquLsDfzvZCALQ+iKxBMVcSVoU+xI9NnKbD8HJtrYHGxaXuxYmN3w/RvWtq+7XqTlTCg==" length="1911175"/>
+    </item>
+      </channel>
 </rss>

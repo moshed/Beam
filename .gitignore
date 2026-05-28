@@ -5,3 +5,6 @@ DerivedData/
 Beam.app
 xcuserdata/
 *.xcuserstate
+
+# Release artifacts
+dist/

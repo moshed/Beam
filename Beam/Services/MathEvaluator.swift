@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct MathEvaluator {
     private static let formatter: NumberFormatter = {
@@ -23,6 +24,9 @@ struct MathEvaluator {
         // Try date calculations
         if let r = evaluateDate(trimmed) { return (r.expression, r.result, true) }
 
+        // Dimensional list (e.g. "3mm x 4mm x 6mm to in", "3 x 4 x 6 mm")
+        if let r = evaluateDimensions(trimmed) { return (r.expression, r.result, false) }
+
         // Try unit conversions
         if let r = evaluateUnitConversion(trimmed) { return (r.expression, r.result, false) }
 
@@ -34,6 +38,9 @@ struct MathEvaluator {
 
         // Auto-convert standalone units to US standard
         if let r = evaluateAutoUnitConvert(trimmed) { return (r.expression, r.result, false) }
+
+        // UPC/GTIN check digit (e.g. 11-digit -> UPC-A, 13-digit -> GTIN-14)
+        if let r = evaluateCheckDigit(trimmed) { return (r.expression, r.result, true) }
 
         // Try standalone number abbreviation (e.g. "5k" -> "5,000", "2.5 million" -> "2,500,000")
         if let r = evaluateAbbreviation(trimmed) { return (r.expression, r.result, false) }
@@ -104,8 +111,15 @@ struct MathEvaluator {
             }
         }
 
-        // Split into tokens by + or whitespace
+        // Split into tokens by + or whitespace.
+        // Convert subtraction "X-Y" into a signed-add "X -Y" so the regex tokenizer
+        // can carry the negative sign through (otherwise "55760-$40560" sums to 96320).
         let cleanInput = working
+            .replacingOccurrences(
+                of: #"([\d\)])\s*-\s*([\$€£¥₪]|\d)"#,
+                with: "$1 -$2",
+                options: .regularExpression
+            )
             .replacingOccurrences(of: "+", with: " ")
 
         // First pass: find what currency is present (to use as default for bare numbers)
@@ -122,9 +136,9 @@ struct MathEvaluator {
         }
         guard let defaultCurrency = detectedCurrency else { return nil }
 
-        // Second pass: parse all tokens (currency-tagged and bare numbers)
-        // Match: symbol+number, number+code, or bare number
-        let tokenPattern = #"([\$€£¥₪])\s*([\d,.]+)|([\d,.]+)\s*([a-zA-Z₪€£¥\$]{2,3})|([\d,.]+)"#
+        // Second pass: parse all tokens (currency-tagged and bare numbers).
+        // Optional leading "-" denotes subtraction; carried through to the amount sign.
+        let tokenPattern = #"(-?)\s*([\$€£¥₪])\s*([\d,.]+)|(-?)\s*([\d,.]+)\s*([a-zA-Z₪€£¥\$]{2,3})|(-?)\s*([\d,.]+)"#
         let regex = try! NSRegularExpression(pattern: tokenPattern, options: .caseInsensitive)
         let cleanNoComma = cleanInput.replacingOccurrences(of: ",", with: "")
         let nsRange = NSRange(cleanNoComma.startIndex..., in: cleanNoComma)
@@ -140,33 +154,40 @@ struct MathEvaluator {
         var amounts: [CurrencyAmount] = []
         var firstCurrency: String?
 
+        func signedAmount(_ signRange: NSRange, _ value: Double) -> Double {
+            if signRange.location != NSNotFound,
+               let r = Range(signRange, in: cleanNoComma),
+               String(cleanNoComma[r]) == "-" { return -value }
+            return value
+        }
+
         for match in matches {
             var amount: Double?
             var currency: String?
 
-            // Pattern 1: symbol + number (e.g. "$5")
-            if match.range(at: 1).location != NSNotFound,
-               let symRange = Range(match.range(at: 1), in: cleanNoComma),
-               let numRange = Range(match.range(at: 2), in: cleanNoComma) {
+            // Pattern 1: [-]symbol+number (e.g. "$5", "-$40")
+            if match.range(at: 2).location != NSNotFound,
+               let symRange = Range(match.range(at: 2), in: cleanNoComma),
+               let numRange = Range(match.range(at: 3), in: cleanNoComma) {
                 let sym = String(cleanNoComma[symRange])
                 let num = String(cleanNoComma[numRange])
                 currency = currencySymbols[sym]
-                amount = parseNumber(num)
+                amount = parseNumber(num).map { signedAmount(match.range(at: 1), $0) }
             }
-            // Pattern 2: number + code (e.g. "5eur")
-            else if match.range(at: 3).location != NSNotFound,
-                    let numRange = Range(match.range(at: 3), in: cleanNoComma),
-                    let codeRange = Range(match.range(at: 4), in: cleanNoComma) {
+            // Pattern 2: [-]number+code (e.g. "5eur", "-5eur")
+            else if match.range(at: 5).location != NSNotFound,
+                    let numRange = Range(match.range(at: 5), in: cleanNoComma),
+                    let codeRange = Range(match.range(at: 6), in: cleanNoComma) {
                 let num = String(cleanNoComma[numRange])
                 let code = String(cleanNoComma[codeRange]).lowercased()
                 currency = currencySymbols[code]
-                amount = parseNumber(num)
+                amount = parseNumber(num).map { signedAmount(match.range(at: 4), $0) }
             }
-            // Pattern 3: bare number — inherit the detected currency
-            else if match.range(at: 5).location != NSNotFound,
-                    let numRange = Range(match.range(at: 5), in: cleanNoComma) {
+            // Pattern 3: [-]bare number — inherit the detected currency
+            else if match.range(at: 8).location != NSNotFound,
+                    let numRange = Range(match.range(at: 8), in: cleanNoComma) {
                 let num = String(cleanNoComma[numRange])
-                amount = parseNumber(num)
+                amount = parseNumber(num).map { signedAmount(match.range(at: 7), $0) }
                 currency = defaultCurrency
             }
 
@@ -221,10 +242,14 @@ struct MathEvaluator {
         guard parts.count >= 2 else { return nil }
 
         let keyword = parts[0]
-        // Strip currency symbols before parsing numbers
-        let numbers = parts.dropFirst()
-            .map { $0.replacingOccurrences(of: #"[\$€£¥₪]"#, with: "", options: .regularExpression) }
-            .compactMap { parseNumber($0) }
+        // Strip currency symbols, parentheses, and commas before parsing numbers
+        // (so "avg (22.00 $25.75)" parses 22 and 25.75).
+        func cleanNumberTokens(_ tokens: [String]) -> [Double] {
+            tokens
+                .map { $0.replacingOccurrences(of: #"[\$€£¥₪(),]"#, with: "", options: .regularExpression) }
+                .compactMap { parseNumber($0) }
+        }
+        let numbers = cleanNumberTokens(Array(parts.dropFirst()))
         guard !numbers.isEmpty else { return nil }
 
         var result: Double?
@@ -268,7 +293,7 @@ struct MathEvaluator {
         case "percent", "percentage":
             // "percent 15 of 200" or "percent 15 200"
             let filtered = parts.dropFirst().filter { $0 != "of" }
-            let nums = filtered.compactMap { parseNumber($0) }
+            let nums = cleanNumberTokens(Array(filtered))
             if nums.count == 2 {
                 result = nums[0] / 100.0 * nums[1]
                 label = "\(format(nums[0]))% of \(format(nums[1]))"
@@ -632,6 +657,179 @@ struct MathEvaluator {
         let val = num.doubleValue
         if val.isNaN || val.isInfinite { return nil }
         return val
+    }
+
+    /// Length units that mark an "x"-list as dimensions rather than multiplication.
+    private static let lengthUnitKeys: Set<String> = ["mm", "cm", "m", "km", "in", "ft", "yd", "mi", "nmi"]
+
+    private static let metricLengthKeys: Set<String> = ["mm", "cm", "m", "km"]
+    private static let cubicKeyFor: [String: String] = [
+        "mm": "cumm", "cm": "cucm", "m": "cum", "km": "cukm",
+        "in": "cuin", "ft": "cuft", "yd": "cuyd", "mi": "cumi",
+    ]
+
+    private struct ParsedDimensions {
+        let values: [Double]
+        let units: [String]      // resolved per-axis source units
+        let sourceUnit: String   // first explicit unit (used for the volume row)
+        let target: String       // resolved target length unit
+        let uniformSource: Bool  // all axes share sourceUnit
+    }
+
+    /// Format with at most 2 decimals, trimming trailing zeros (0.1181→"0.12", 72.0→"72").
+    private static func fmt2(_ d: Double) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 2
+        f.usesGroupingSeparator = true
+        return f.string(from: NSNumber(value: d)) ?? String(format: "%.2f", d)
+    }
+
+    /// Like fmt2 but never collapses a non-zero value to "0": if 2 decimals would
+    /// round to zero, fall back to enough decimals to show ~2 significant digits.
+    private static func fmtNonZero(_ d: Double) -> String {
+        let two = fmt2(d)
+        if d == 0 || !(two == "0" || two == "-0") { return two }
+        let magnitude = floor(log10(abs(d)))
+        let decimals = max(2, Int(-magnitude) + 1)
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = decimals
+        f.usesGroupingSeparator = true
+        return f.string(from: NSNumber(value: d)) ?? String(format: "%.\(decimals)f", d)
+    }
+
+    private static func parseDimensions(_ input: String) -> ParsedDimensions? {
+        let lower = input.lowercased().trimmingCharacters(in: .whitespaces)
+
+        // Optional explicit target: "... to in" / "... as cm"
+        var body = lower
+        var explicitTarget: String?
+        for sep in [" to ", " as "] {
+            if let range = lower.range(of: sep, options: .backwards) {
+                let right = String(lower[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if isKnownUnit(right) {
+                    body = String(lower[lower.startIndex..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    explicitTarget = right
+                    break
+                }
+            }
+        }
+
+        // Must be a separator-delimited list of 2+ parts. Prefer x/× (allows bare
+        // operands that inherit the trailing unit). Fall back to "*" only when every
+        // part carries its own explicit length unit — so "3*4*5" stays multiplication
+        // but "32mm*45mm*67cm" is recognised as dimensions.
+        let normalizedBody = body.replacingOccurrences(of: "×", with: "x")
+        var rawParts = normalizedBody.components(separatedBy: "x")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var requireUnitOnEveryPart = false
+        if rawParts.count < 2 && normalizedBody.contains("*") {
+            rawParts = normalizedBody.components(separatedBy: "*")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            requireUnitOnEveryPart = true
+        }
+        guard rawParts.count >= 2 else { return nil }
+        if requireUnitOnEveryPart {
+            let allHaveLengthUnit = rawParts.allSatisfy { part in
+                guard let (_, unit) = splitExprAndUnit(part) else { return false }
+                return lengthUnitKeys.contains(normalizeUnit(unit))
+            }
+            guard allHaveLengthUnit else { return nil }
+        }
+
+        var values: [Double] = []
+        var units: [String?] = []
+        for part in rawParts {
+            if let (exprStr, unit) = splitExprAndUnit(part) {
+                let norm = normalizeUnit(unit)
+                guard lengthUnitKeys.contains(norm), let v = evalMathToDouble(exprStr) else { return nil }
+                values.append(v)
+                units.append(norm)
+            } else if let v = parseNumber(part.replacingOccurrences(of: ",", with: "")) {
+                values.append(v)
+                units.append(nil)
+            } else {
+                return nil
+            }
+        }
+
+        let explicitUnits = units.compactMap { $0 }
+        guard let sourceUnit = explicitUnits.first else { return nil }
+        let resolvedUnits = units.map { $0 ?? sourceUnit }
+
+        let target: String
+        if let t = explicitTarget {
+            let n = normalizeUnit(t)
+            guard lengthUnitKeys.contains(n) else { return nil }
+            target = n
+        } else {
+            target = metricLengthKeys.contains(sourceUnit) ? "in" : "mm"
+        }
+
+        return ParsedDimensions(
+            values: values,
+            units: resolvedUnits,
+            sourceUnit: sourceUnit,
+            target: target,
+            uniformSource: resolvedUnits.allSatisfy { $0 == sourceUnit }
+        )
+    }
+
+    /// Primary row for a dimension list: multiply the axes and convert the volume
+    /// to cubic target units, e.g. "3mm x 4mm x 6mm to in" → "0.0044 in³".
+    /// Mixed units (e.g. "32mm*45mm*67cm") are first normalised to the source unit.
+    private static func evaluateDimensions(_ input: String) -> (expression: String, result: String)? {
+        guard let d = parseDimensions(input),
+              let cubicSrc = cubicKeyFor[d.sourceUnit] else { return nil }
+
+        // Normalise every axis to the source unit, then multiply.
+        var product: Double = 1
+        for (v, u) in zip(d.values, d.units) {
+            guard let inSource = convert(v, from: u, to: d.sourceUnit) else { return nil }
+            product *= inSource
+        }
+        if d.target == d.sourceUnit {
+            return (expression: input, result: "\(fmtNonZero(product)) \(d.sourceUnit)³")
+        }
+        guard let cubicDst = cubicKeyFor[d.target],
+              let vol = convert(product, from: cubicSrc, to: cubicDst) else { return nil }
+        return (expression: input, result: "\(fmtNonZero(vol)) \(d.target)³")
+    }
+
+    /// Secondary row: convert each axis individually, e.g.
+    /// "3mm x 4mm x 6mm to in" → "0.12 × 0.16 × 0.24 in".
+    static func secondaryResult(_ input: String) -> (expression: String, result: String)? {
+        guard let d = parseDimensions(input) else { return nil }
+        var converted: [String] = []
+        for (v, u) in zip(d.values, d.units) {
+            guard let c = convert(v, from: u, to: d.target) else { return nil }
+            converted.append(fmt2(c))
+        }
+        return (expression: input, result: "\(converted.joined(separator: " × ")) \(d.target)")
+    }
+
+    /// When a dimension list uses a bare "m" — ambiguous between metres and "million" —
+    /// also offer the pure-arithmetic reading: "1m x 1000" → "1,000,000 * 1,000 = 1,000,000,000".
+    static func dimensionArithmetic(_ input: String) -> (expression: String, result: String)? {
+        let lower = input.lowercased()
+        // Must be an x/×-list AND contain a bare "m" (\dm\b — not "mm"/"cm").
+        guard lower.range(of: #"[x×]"#, options: .regularExpression) != nil,
+              lower.range(of: #"\dm\b"#, options: .regularExpression) != nil else { return nil }
+        // Drop any "to <unit>" tail — arithmetic ignores it.
+        var body = input
+        for sep in [" to ", " as "] {
+            if let r = body.lowercased().range(of: sep, options: .backwards) {
+                body = String(body[body.startIndex..<r.lowerBound])
+            }
+        }
+        // evaluateExpression converts x→* and (now) expands a bare "m" to million.
+        guard let r = evaluateExpression(body) else { return nil }
+        return (expression: normalizeExpression(body, expectedResult: r.result), result: r.result)
     }
 
     private static func evaluateUnitConversion(_ input: String) -> (expression: String, result: String)? {
@@ -1206,8 +1404,39 @@ struct MathEvaluator {
         )
         expr = expr.replacingOccurrences(of: "^", with: "**")
 
+        // Convert a trailing "N%" into "(N*0.01)" so "925x12%" -> 925*0.12 = 111.
+        // Only when % is NOT immediately followed by a digit or "(" (that's modulo, e.g. "10%3").
+        expr = expr.replacingOccurrences(
+            of: #"([\d.]+)\s*%(?!\s*[\d.(])"#,
+            with: "($1*0.01)",
+            options: .regularExpression
+        )
+
         let mathChars = CharacterSet(charactersIn: "+-*/%()")
         let mathFunctions = ["sqrt", "log", "ln", "abs", "ceil", "floor"]
+
+        // Strip stray "label" words (e.g. "fob" in "5.22 fob x 12") that aren't math
+        // functions, so annotated expressions still evaluate. Runs after abbreviation
+        // expansion, so "4k"/"5m" are already numeric. The label survives in the copied
+        // text because normalizeExpression keeps the original string.
+        if expr.range(of: #"[a-zA-Z]"#, options: .regularExpression) != nil {
+            expr = stripLabelWords(expr)
+        }
+
+        // Implicit multiplication: "10(1-.43)" → "10*(1-.43)", "(2)(3)" → "(2)*(3)",
+        // "(1-.43)10" → "(1-.43)*10". A leading "+"/"-" before "(" still binds as the
+        // operator (e.g. "1 + (2)") because we require a digit or ")" immediately before.
+        expr = expr.replacingOccurrences(
+            of: #"([\d)])\s*\("#,
+            with: "$1*(",
+            options: .regularExpression
+        )
+        expr = expr.replacingOccurrences(
+            of: #"\)\s*(\d)"#,
+            with: ")*$1",
+            options: .regularExpression
+        )
+
         let hasMathOp = expr.unicodeScalars.contains(where: { mathChars.contains($0) })
         let hasMathFunc = mathFunctions.contains(where: { expr.lowercased().contains($0) })
         guard hasMathOp || hasMathFunc else { return nil }
@@ -1249,6 +1478,19 @@ struct MathEvaluator {
         }
         guard let formatted = formatter.string(from: result) else { return nil }
 
+        // Margin formula ("1 - cost/sell" = 25.00%): if input is `1 - <expr>/<expr>`,
+        // format the result as a percentage with 2 decimals.
+        let inputTrim = input.trimmingCharacters(in: .whitespaces)
+        if inputTrim.range(of: #"^1\s*-.*/.*$"#, options: .regularExpression) != nil {
+            let pctFmt = NumberFormatter()
+            pctFmt.numberStyle = .decimal
+            pctFmt.minimumFractionDigits = 2
+            pctFmt.maximumFractionDigits = 2
+            pctFmt.usesGroupingSeparator = true
+            let pctStr = pctFmt.string(from: NSNumber(value: doubleVal * 100)) ?? String(format: "%.2f", doubleVal * 100)
+            return (expression: input, result: "\(pctStr)%")
+        }
+
         // If the original input had a leading currency symbol, prefix the result and round to 2 decimals
         if let first = input.trimmingCharacters(in: CharacterSet(charactersIn: "( ")).first,
            "$€£¥₪".contains(first) {
@@ -1261,6 +1503,37 @@ struct MathEvaluator {
             return (expression: input, result: String(first) + rounded)
         }
         return (expression: input, result: formatted)
+    }
+
+    // MARK: - UPC / GTIN Check Digit
+
+    /// Computes the GS1 mod-10 check digit for a barcode payload missing its final digit.
+    /// Accepts 11/12/13-digit payloads (with optional spaces/dashes) → UPC-A / EAN-13 / GTIN-14.
+    private static func evaluateCheckDigit(_ input: String) -> (expression: String, result: String)? {
+        let digits = input.filter { $0.isNumber }
+        // Only treat as a barcode if the input was purely digits + optional separators.
+        let allowed = CharacterSet(charactersIn: "0123456789 -")
+        guard input.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+
+        let label: String
+        switch digits.count {
+        case 11: label = "UPC-A"
+        case 12: label = "EAN-13"
+        case 13: label = "GTIN-14"
+        default: return nil
+        }
+
+        let nums = digits.compactMap { $0.wholeNumberValue }
+        guard nums.count == digits.count else { return nil }
+
+        // GS1: weight digits 3,1,3,1… from the rightmost payload digit.
+        var sum = 0
+        for (i, d) in nums.reversed().enumerated() {
+            sum += d * (i % 2 == 0 ? 3 : 1)
+        }
+        let check = (10 - (sum % 10)) % 10
+        let full = digits + String(check)
+        return (expression: "\(label) check digit: \(check)", result: full)
     }
 
     // MARK: - Standalone Abbreviation
@@ -1300,7 +1573,10 @@ struct MathEvaluator {
 
     /// Expands abbreviations inline within an expression string (e.g. "5k + 2m" -> "5000 + 2000000")
     private static func expandAbbreviations(_ expr: String) -> String {
-        let pattern = #"(\d[\d,.]*)\s*(k|mil|milion|million|billion|bil|trillion|tril)\b"#
+        // Single-letter m/b/t only expand here (math-expression context, operator required),
+        // so they don't clash with "m" = meters in unit conversions. Longest alternatives
+        // first; the trailing \b also stops "m" from matching inside "million".
+        let pattern = #"(\d[\d,.]*)\s*(k|million|milion|mil|m|billion|bil|b|trillion|tril|t)\b"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return expr }
         var result = expr
         // Process matches from end to preserve ranges
@@ -1326,6 +1602,134 @@ struct MathEvaluator {
             result.replaceSubrange(fullRange, with: expandedStr)
         }
         return result
+    }
+
+    private static let mathFunctionNames: Set<String> = ["sqrt", "log", "ln", "abs", "ceil", "floor"]
+
+    /// Character ranges of "label" tokens to remove from a math string.
+    /// A label is an alphanumeric run containing ≥1 letter that isn't a math function,
+    /// number abbreviation (4k), or the multiply "x". A label also absorbs TIGHT
+    /// hyphen-joined parts so a model number like "DC-124" / "DC-124-RD" is dropped
+    /// whole — but a spaced "DC - 124" keeps the "-" as subtraction.
+    private static func labelRanges(in expr: String) -> [NSRange] {
+        let abbrevPattern = #"^[\d.,]+(k|million|milion|mil|m|billion|bil|b|trillion|tril|t)$"#
+        guard let tokenRegex = try? NSRegularExpression(pattern: #"[a-zA-Z0-9]*[a-zA-Z][a-zA-Z0-9]*"#),
+              let contRegex = try? NSRegularExpression(pattern: #"^-[a-zA-Z0-9]+"#) else { return [] }
+        let ns = expr as NSString
+        var ranges: [NSRange] = []
+        var consumedUpTo = 0
+        for m in tokenRegex.matches(in: expr, range: NSRange(location: 0, length: ns.length)) {
+            if m.range.location < consumedUpTo { continue }
+            let token = ns.substring(with: m.range)
+            let lower = token.lowercased()
+            let lettersOnlyX = token.filter { $0.isLetter }.allSatisfy { $0 == "x" }
+            let isAbbrev = lower.range(of: abbrevPattern, options: .regularExpression) != nil
+            guard !mathFunctionNames.contains(lower), !isAbbrev, !lettersOnlyX else { continue }
+            // Extend across hyphen-joined model-number continuations.
+            var end = m.range.location + m.range.length
+            while end < ns.length,
+                  let cm = contRegex.firstMatch(in: expr, range: NSRange(location: end, length: ns.length - end)) {
+                end += cm.range.length
+            }
+            ranges.append(NSRange(location: m.range.location, length: end - m.range.location))
+            consumedUpTo = end
+        }
+        return ranges
+    }
+
+    /// Remove label tokens (see labelRanges) so an annotated expression still evaluates.
+    private static func stripLabelWords(_ expr: String) -> String {
+        let ranges = labelRanges(in: expr)
+        guard !ranges.isEmpty else { return expr }
+        let ns = expr as NSString
+        var result = ""
+        var cursor = 0
+        for r in ranges {
+            result += ns.substring(with: NSRange(location: cursor, length: r.location - cursor))
+            cursor = r.location + r.length
+        }
+        result += ns.substring(from: cursor)
+        return result
+    }
+
+    /// Builds a styled version of a math input where stripped "label" tokens are
+    /// struck through and dimmed, while the parts that actually get calculated stay
+    /// solid. Returns nil if there are no labels (nothing to highlight).
+    static func labelHighlightedExpression(_ input: String) -> AttributedString? {
+        let ranges = labelRanges(in: input)
+        guard !ranges.isEmpty else { return nil }
+        let ns = input as NSString
+        var attr = AttributedString()
+        var cursor = 0
+        for r in ranges {
+            var normal = AttributedString(ns.substring(with: NSRange(location: cursor, length: r.location - cursor)))
+            normal.foregroundColor = .primary
+            attr += normal
+
+            var label = AttributedString(ns.substring(with: r))
+            label.strikethroughStyle = .single
+            label.foregroundColor = .secondary
+            attr += label
+            cursor = r.location + r.length
+        }
+        var tail = AttributedString(ns.substring(from: cursor))
+        tail.foregroundColor = .primary
+        attr += tail
+        return attr
+    }
+
+    // MARK: - Expression Normalization
+
+    /// Produce a clean, human-readable version of a math expression for copying:
+    /// "7kx5.8k/4million" → "7,000 * 5,800 / 4,000,000". Expands abbreviations,
+    /// converts x→*, and adds thousands separators. Returns the original input if
+    /// the normalized form no longer evaluates to `expectedResult` (so non-arithmetic
+    /// inputs like unit conversions are left untouched).
+    static func normalizeExpression(_ input: String, expectedResult: String) -> String {
+        var e = input
+        // Convert x/X to *
+        while let range = e.range(of: #"([\d\w)])\s*[xX]\s*(?=[\d.(])"#, options: .regularExpression) {
+            let matched = String(e[range])
+            let replacement = String(matched.prefix(while: { $0 != "x" && $0 != "X" })) + "*"
+            e.replaceSubrange(range, with: replacement)
+        }
+        e = expandAbbreviations(e)
+        // Strip any existing thousands commas, then re-group all numbers.
+        e = e.replacingOccurrences(of: #"(\d),(\d)"#, with: "$1$2", options: .regularExpression)
+        e = addThousandsSeparators(e)
+        // Space out operators.
+        e = e.replacingOccurrences(of: #"\s*([+\-*/])\s*"#, with: " $1 ", options: .regularExpression)
+        e = e.trimmingCharacters(in: .whitespaces)
+
+        // Only use the normalized form if it still evaluates to the same answer.
+        if let check = evaluate(e), check.result == expectedResult {
+            return e
+        }
+        return input
+    }
+
+    private static func addThousandsSeparators(_ s: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\d+(\.\d+)?"#) else { return s }
+        let ns = s as NSString
+        var result = ""
+        var lastEnd = 0
+        for m in regex.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            result += ns.substring(with: NSRange(location: lastEnd, length: m.range.location - lastEnd))
+            result += groupNumber(ns.substring(with: m.range))
+            lastEnd = m.range.location + m.range.length
+        }
+        result += ns.substring(from: lastEnd)
+        return result
+    }
+
+    private static func groupNumber(_ numStr: String) -> String {
+        let parts = numStr.split(separator: ".", maxSplits: 1).map(String.init)
+        guard let intVal = Int(parts[0]) else { return numStr }
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = true
+        guard let grouped = f.string(from: NSNumber(value: intVal)) else { return numStr }
+        return parts.count > 1 ? "\(grouped).\(parts[1])" : grouped
     }
 
     // MARK: - Formatting

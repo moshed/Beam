@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Contacts
+import Sparkle
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: AppDelegate?
@@ -13,6 +14,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var keystrokeBuffer: String = ""
     private var isShowingPanel = false
     private var previousApp: NSRunningApplication?
+    private(set) lazy var updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -24,6 +30,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupPanel()
         setupHotkey()
         requestContactsAccess()
+        setupUpdates()
+    }
+
+    private func setupUpdates() {
+        // Background check on by default, but NEVER install silently — Sparkle shows its
+        // standard "update available" prompt (Install / Remind Me Later / Skip This
+        // Version), so the user always chooses. Users can disable auto-checks in the
+        // Updates settings tab. Sparkle handles all download/install + signature checks.
+        updaterController.updater.automaticallyDownloadsUpdates = false
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -57,6 +72,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+
+        let checkUpdatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        checkUpdatesItem.target = updaterController
+        menu.addItem(checkUpdatesItem)
 
         menu.addItem(.separator())
 
@@ -142,6 +161,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func dismissPanel(skipReactivation: Bool = false) {
         searchCoordinator.saveAndClear()
+        MathTooltipPanel.shared.hide()
         panel?.orderOut(nil)
         if !skipReactivation, let app = previousApp, !app.isTerminated {
             app.activate()
@@ -179,6 +199,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Settings
 
     @objc func openSettings() {
+        // Hide the floating search panel so Settings isn't stuck behind it.
+        if panel?.isVisible == true {
+            dismissPanel(skipReactivation: true)
+        }
         if let window = settingsWindow {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)

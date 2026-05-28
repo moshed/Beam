@@ -56,6 +56,8 @@ struct SearchResult: Identifiable {
     let icon: NSImage?
     let actions: [ResultAction]
     var details: [DetailItem] = []
+    /// Optional styled subtitle (e.g. math with stripped labels struck through).
+    var attributedSubtitle: AttributedString? = nil
 
     var action: () -> Void { actions.first?.handler ?? {} }
     var isExpandable: Bool { !details.isEmpty }

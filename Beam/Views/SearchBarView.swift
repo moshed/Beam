@@ -54,6 +54,7 @@ struct SearchBarView: NSViewRepresentable {
 /// Custom NSTextField that uses a custom field editor to detect paste
 class BeamSearchField: NSTextField {
     weak var coordinator: SearchBarView.Coordinator?
+    private var selectionObserver: NSObjectProtocol?
     private lazy var customEditor: BeamFieldEditor = {
         let editor = BeamFieldEditor()
         editor.isFieldEditor = true
@@ -61,12 +62,43 @@ class BeamSearchField: NSTextField {
         return editor
     }()
 
+    deinit {
+        if let obs = selectionObserver { NotificationCenter.default.removeObserver(obs) }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        MathTooltipPanel.shared.hide()
+        return super.resignFirstResponder()
+    }
+
     // Provide custom field editor that detects paste
     override func becomeFirstResponder() -> Bool {
-        // Install our custom field editor
         let result = super.becomeFirstResponder()
-        if result, let editor = self.currentEditor() as? NSTextView {
-            // We can't replace the field editor, but we can observe it
+        // Observe selection changes in the field editor so we can show the partial
+        // evaluation of whatever substring the user has highlighted.
+        if result, selectionObserver == nil {
+            selectionObserver = NotificationCenter.default.addObserver(
+                forName: NSTextView.didChangeSelectionNotification,
+                object: nil, queue: .main
+            ) { [weak self] note in
+                guard let self = self,
+                      let tv = note.object as? NSTextView,
+                      tv === self.currentEditor() else { return }
+                let r = tv.selectedRange()
+                if r.length > 0, r.location + r.length <= (tv.string as NSString).length {
+                    let sel = (tv.string as NSString).substring(with: r)
+                    AppDelegate.shared?.searchCoordinator.updateSelection(sel)
+                    if let m = AppDelegate.shared?.searchCoordinator.selectionMath {
+                        let rect = tv.firstRect(forCharacterRange: r, actualRange: nil)
+                        MathTooltipPanel.shared.show(text: "\(m.text)  =  \(m.result)", anchor: rect)
+                    } else {
+                        MathTooltipPanel.shared.hide()
+                    }
+                } else {
+                    AppDelegate.shared?.searchCoordinator.updateSelection("")
+                    MathTooltipPanel.shared.hide()
+                }
+            }
         }
         return result
     }
@@ -105,5 +137,82 @@ class BeamFieldEditor: NSTextView {
             guard let self = self else { return }
             self.searchField?.coordinator?.sync(self.string)
         }
+    }
+}
+
+/// Floating tooltip anchored to a text selection — shows the partial-evaluation
+/// result directly above (or below if no room) the highlighted substring.
+class MathTooltipPanel: NSPanel {
+    static let shared = MathTooltipPanel()
+    private let label = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 120, height: 24),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        isFloatingPanel = true
+        level = .floating
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = true
+        hidesOnDeactivate = false
+        ignoresMouseEvents = true
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+
+        let bubble = NSView()
+        bubble.wantsLayer = true
+        bubble.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.94).cgColor
+        bubble.layer?.cornerRadius = 7
+        bubble.layer?.masksToBounds = true
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+
+        label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        label.textColor = .white
+        label.backgroundColor = .clear
+        label.isBordered = false
+        label.isEditable = false
+        label.isSelectable = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(bubble)
+        bubble.addSubview(label)
+        NSLayoutConstraint.activate([
+            bubble.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            bubble.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            bubble.topAnchor.constraint(equalTo: container.topAnchor),
+            bubble.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            label.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 4),
+            label.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -4),
+            label.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 9),
+            label.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -9),
+        ])
+        contentView = container
+    }
+
+    /// `anchor` is the selection rect in screen coordinates.
+    func show(text: String, anchor: NSRect) {
+        guard !text.isEmpty else { hide(); return }
+        label.stringValue = text
+        label.sizeToFit()
+        let w = max(label.frame.width + 20, 60)
+        let h = label.frame.height + 8
+
+        // Default: above the selection. If it'd go off the top of the screen, drop below.
+        var y = anchor.maxY + 6
+        let screenTop = NSScreen.screens.first { $0.frame.contains(anchor.origin) }?.visibleFrame.maxY
+            ?? NSScreen.main?.visibleFrame.maxY ?? CGFloat.greatestFiniteMagnitude
+        if y + h > screenTop {
+            y = anchor.minY - h - 6
+        }
+        let x = anchor.midX - w / 2
+        setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
+        orderFront(nil)
+    }
+
+    func hide() {
+        orderOut(nil)
     }
 }

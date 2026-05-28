@@ -60,11 +60,20 @@ class AppSearcher {
 
     func search(_ query: String) -> [SearchResult] {
         let lower = query.lowercased()
+        // Also compare with whitespace/punctuation stripped so "openvpn" matches "Open VPN"
+        // and "open vpn" matches "OpenVPN".
+        let lowerCompact = lower.filter { !$0.isWhitespace && !$0.isPunctuation }
+        func compact(_ s: String) -> String {
+            s.lowercased().filter { !$0.isWhitespace && !$0.isPunctuation }
+        }
         return apps
-            .filter { $0.name.lowercased().contains(lower) }
+            .filter { app in
+                let n = app.name.lowercased()
+                return n.contains(lower) || compact(app.name).contains(lowerCompact)
+            }
             .sorted { a, b in
-                let aStarts = a.name.lowercased().hasPrefix(lower)
-                let bStarts = b.name.lowercased().hasPrefix(lower)
+                let aStarts = a.name.lowercased().hasPrefix(lower) || compact(a.name).hasPrefix(lowerCompact)
+                let bStarts = b.name.lowercased().hasPrefix(lower) || compact(b.name).hasPrefix(lowerCompact)
                 if aStarts != bStarts { return aStarts }
                 return a.name.count < b.name.count
             }

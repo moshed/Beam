@@ -17,6 +17,7 @@ struct SearchResultRow: View {
                 } else if let icon = result.icon {
                     Image(nsImage: icon)
                         .resizable()
+                        .aspectRatio(contentMode: .fit)
                         .frame(width: 28, height: 28)
                 } else {
                     Image(systemName: result.type.iconName)
@@ -30,10 +31,16 @@ struct SearchResultRow: View {
                         .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
                     if result.type != .emoji, !result.subtitle.isEmpty {
-                        Text(result.subtitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        Group {
+                            if let attributed = result.attributedSubtitle {
+                                Text(attributed)
+                            } else {
+                                Text(result.subtitle)
+                            }
+                        }
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     }
                 }
 

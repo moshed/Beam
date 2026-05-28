@@ -13,6 +13,9 @@ class SearchCoordinator {
     var query: String = ""
     var results: [SearchResult] = []
     var mathResultInfo: MathResultInfo?
+    /// Partial-evaluation result for the currently selected substring of the search bar
+    /// (Excel-style: highlight a portion, see just that piece compute).
+    var selectionMath: (text: String, result: String)?
     var selectedIndex: Int = 0
     var displayMode: ResultDisplayMode = SettingsManager.shared.resultDisplayMode
     var previousQuery: String = ""
@@ -121,17 +124,29 @@ class SearchCoordinator {
     private let timezoneSearcher = TimeZoneSearcher()
     private let ollamaSearcher = OllamaSearcher.shared
     private var debounceTimer: Timer?
-    private var autoChatTimer: Timer?
     private var suppressDidSet = false
 
     init() {
         MathEvaluator.fetchRates()
     }
 
+    /// Called when the search-bar selection changes — evaluates the selected substring
+    /// and stores the partial result for inline display.
+    func updateSelection(_ selected: String) {
+        let trimmed = selected.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != query.trimmingCharacters(in: .whitespaces) else {
+            selectionMath = nil
+            return
+        }
+        if let r = MathEvaluator.evaluate(trimmed) {
+            selectionMath = (trimmed, r.result)
+        } else {
+            selectionMath = nil
+        }
+    }
+
     /// Called from SearchBarView when text changes
     func queryChanged(_ newQuery: String) {
-        autoChatTimer?.invalidate()
-        autoChatTimer = nil
         query = newQuery
         if isHistoryMode && !newQuery.isEmpty {
             exitHistoryMode()
@@ -175,6 +190,7 @@ class SearchCoordinator {
         suppressDidSet = false
         results = []
         mathResultInfo = nil
+        selectionMath = nil
         selectedIndex = 0
         fileSearcher.stop()
     }
@@ -190,6 +206,7 @@ class SearchCoordinator {
         suppressDidSet = false
         results = []
         mathResultInfo = nil
+        selectionMath = nil
         selectedIndex = 0
         fileSearcher.stop()
         debounceTimer?.invalidate()
@@ -538,7 +555,7 @@ class SearchCoordinator {
             let title = isInfo ? resultText : "= \(resultText)"
             let icon = isInfo ? "calendar.circle.fill" : "equal.circle.fill"
             let separator = isInfo ? " is " : " = "
-            merged.append(SearchResult(
+            var mathRow = SearchResult(
                 type: .math,
                 title: title,
                 subtitle: exprText,
@@ -549,11 +566,63 @@ class SearchCoordinator {
                         NSPasteboard.general.setString(resultText, forType: .string)
                     },
                     ResultAction(name: "Copy query + result") {
+                        let lhs = isInfo ? exprText
+                            : MathEvaluator.normalizeExpression(exprText, expectedResult: resultText)
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString("\(exprText)\(separator)\(resultText)", forType: .string)
+                        NSPasteboard.general.setString("\(lhs)\(separator)\(resultText)", forType: .string)
                     },
                 ]
-            ))
+            )
+            // Strike through any stripped label tokens so it's clear what was calculated.
+            if !isInfo {
+                mathRow.attributedSubtitle = MathEvaluator.labelHighlightedExpression(exprText)
+            }
+            merged.append(mathRow)
+
+            // Second row for ambiguous dimension input: per-axis conversion
+            // (the primary row above is the multiply+convert volume).
+            if let secondary = MathEvaluator.secondaryResult(q) {
+                let secText = secondary.result
+                merged.append(SearchResult(
+                    type: .math,
+                    title: secText,
+                    subtitle: "\(secondary.expression) (per axis)",
+                    icon: NSImage(systemSymbolName: "ruler", accessibilityDescription: nil),
+                    actions: [
+                        ResultAction(name: "Copy result") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(secText, forType: .string)
+                        },
+                        ResultAction(name: "Copy query + result") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString("\(secondary.expression) = \(secText)", forType: .string)
+                        },
+                    ]
+                ))
+            }
+
+            // Third row when a bare "m" makes the input ambiguous (metres vs million):
+            // the pure-arithmetic interpretation, e.g. "1m x 1000" → 1,000,000,000.
+            if let arith = MathEvaluator.dimensionArithmetic(q) {
+                let aResult = arith.result
+                let aExpr = arith.expression
+                merged.append(SearchResult(
+                    type: .math,
+                    title: "= \(aResult)",
+                    subtitle: "\(aExpr)  (m = million)",
+                    icon: NSImage(systemSymbolName: "function", accessibilityDescription: nil),
+                    actions: [
+                        ResultAction(name: "Copy result") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(aResult, forType: .string)
+                        },
+                        ResultAction(name: "Copy query + result") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString("\(aExpr) = \(aResult)", forType: .string)
+                        },
+                    ]
+                ))
+            }
         }
 
         let timezones = timezoneSearcher.search(q)
@@ -586,35 +655,11 @@ class SearchCoordinator {
 
         results = merged
         selectedIndex = 0
-        scheduleAutoChat(for: q)
 
         fileSearcher.search(q) { [weak self] fileResults in
             guard let self = self, self.query == q else { return }
             let nonFileResults = self.results.filter { $0.type != .file }
             self.results = nonFileResults + fileResults
-        }
-    }
-
-    /// If the only available result for a query is "Ask AI", auto-transition to chat
-    /// after a short pause so the user doesn't have to press Enter explicitly.
-    private func scheduleAutoChat(for q: String) {
-        autoChatTimer?.invalidate()
-        autoChatTimer = nil
-
-        // Heuristic: query must look intentional (has whitespace, ends with ?, or is long).
-        let trimmed = q.trimmingCharacters(in: .whitespaces)
-        let looksIntentional = trimmed.contains(" ") || trimmed.hasSuffix("?") || trimmed.count >= 12
-        guard looksIntentional else { return }
-
-        autoChatTimer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: false) { [weak self] _ in
-            guard let self = self,
-                  self.query == q,
-                  !self.isChatMode,
-                  self.results.count == 1,
-                  self.results.first?.type == .ai else { return }
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
-                self.enterChatMode(prompt: q)
-            }
         }
     }
 }

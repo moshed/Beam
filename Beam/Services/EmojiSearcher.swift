@@ -41,15 +41,75 @@ class EmojiSearcher {
         for range in ranges {
             for scalar in range {
                 guard let unicode = Unicode.Scalar(scalar) else { continue }
-                let char = String(Character(unicode))
+                // Append VS16 (emoji presentation selector) for scalars that have a
+                // text-style default (e.g. ❤ U+2764 → ❤️), so they render as the colored emoji.
+                let needsEmojiSelector = unicode.properties.isEmoji && !unicode.properties.isEmojiPresentation
+                let char = String(Character(unicode)) + (needsEmojiSelector ? "\u{FE0F}" : "")
                 guard let name = unicode.properties.name?.lowercased(), !name.isEmpty else { continue }
-                // Filter out characters that can't be rendered (show as ? in box)
                 guard canRender(char) else { continue }
                 results.append((char, name))
+                addVariants(base: char, name: name, baseScalar: unicode, into: &results)
             }
         }
 
         emojiData = results
+    }
+
+    /// Skin-tone modifiers (Fitzpatrick) and ZWJ gender sequences.
+    private static let skinTones: [(label: String, scalar: Unicode.Scalar)] = [
+        ("light skin tone", Unicode.Scalar(0x1F3FB)!),
+        ("medium-light skin tone", Unicode.Scalar(0x1F3FC)!),
+        ("medium skin tone", Unicode.Scalar(0x1F3FD)!),
+        ("medium-dark skin tone", Unicode.Scalar(0x1F3FE)!),
+        ("dark skin tone", Unicode.Scalar(0x1F3FF)!),
+    ]
+    private static let zwj = "\u{200D}"
+    private static let maleSign = "\u{2642}\u{FE0F}"
+    private static let femaleSign = "\u{2640}\u{FE0F}"
+
+    private func addVariants(base: String, name: String, baseScalar: Unicode.Scalar, into results: inout [(String, String)]) {
+        // 1. Skin-tone variants for any emoji-modifier-base scalar (e.g. 🤷🏻)
+        let supportsSkinTone = baseScalar.properties.isEmojiModifierBase
+        if supportsSkinTone {
+            for (label, mod) in Self.skinTones {
+                let variant = base + String(mod)
+                if isLigatedEmoji(variant) {
+                    results.append((variant, "\(name): \(label)"))
+                }
+            }
+        }
+
+        // 2. Gendered variants (ZWJ sequences) — try for any emoji-modifier-base scalar.
+        // The ligature filter (1-glyph check) rejects combinations the system doesn't
+        // support, so 👍/👶 won't get bogus "man thumbs up" entries. We can't rely on
+        // the Unicode name containing "person" (e.g. U+1F937 is just "SHRUG").
+        guard supportsSkinTone else { return }
+        for (genderSign, genderWord) in [(Self.maleSign, "man"), (Self.femaleSign, "woman")] {
+            let plain = base + Self.zwj + genderSign
+            guard isLigatedEmoji(plain) else { continue }
+            let variantName: String = {
+                if name.contains("person") {
+                    return name.replacingOccurrences(of: "person", with: genderWord)
+                }
+                return "\(genderWord) \(name)"
+            }()
+            results.append((plain, variantName))
+            for (label, mod) in Self.skinTones {
+                let withTone = base + String(mod) + Self.zwj + genderSign
+                if isLigatedEmoji(withTone) {
+                    results.append((withTone, "\(variantName): \(label)"))
+                }
+            }
+        }
+    }
+
+    /// True if `str` renders as a single ligated glyph (i.e. the ZWJ sequence is supported by the system).
+    /// Side-by-side glyphs (count > 1) means the sequence is invalid for the current emoji font.
+    private func isLigatedEmoji(_ str: String) -> Bool {
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 16)]
+        let attrStr = NSAttributedString(string: str, attributes: attrs)
+        let line = CTLineCreateWithAttributedString(attrStr)
+        return CTLineGetGlyphCount(line) == 1
     }
 
     func search(_ query: String) -> [SearchResult] {

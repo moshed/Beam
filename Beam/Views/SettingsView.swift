@@ -8,12 +8,19 @@ struct SettingsView: View {
     @State private var isRecordingExpandShortcut = false
     @State private var isRecordingCollapseShortcut = false
 
+    @ObservedObject private var settingsState = SettingsState.shared
+
     var body: some View {
-        TabView {
+        TabView(selection: $settingsState.selectedTab) {
             GeneralSettingsTab(settings: settings, isRecordingShortcut: $isRecordingShortcut, isRecordingHistoryShortcut: $isRecordingHistoryShortcut, isRecordingExpandShortcut: $isRecordingExpandShortcut, isRecordingCollapseShortcut: $isRecordingCollapseShortcut)
                 .tabItem { Label("General", systemImage: "gear") }
+                .tag(0)
             ActionsSettingsTab(settings: settings)
                 .tabItem { Label("Actions", systemImage: "hand.tap") }
+                .tag(1)
+            UpdatesSettingsTab()
+                .tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
+                .tag(2)
         }
         .frame(width: 480, height: 620)
     }

@@ -52,12 +52,12 @@ struct BeamContentView: View {
                         if math.isInfo {
                             Text(math.result)
                                 .font(.system(size: 18, weight: .medium, design: .rounded))
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.primary)
                                 .lineLimit(1)
                         } else {
                             Text("= \(math.result)")
                                 .font(.system(size: 18, weight: .medium, design: .rounded))
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.primary)
                                 .lineLimit(1)
                         }
                     }

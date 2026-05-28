@@ -16,5 +16,20 @@
         type="application/octet-stream"
         sparkle:edSignature="3LKfXxWWY6oMkfKyytKquLsDfzvZCALQ+iKxBMVcSVoU+xI9NnKbD8HJtrYHGxaXuxYmN3w/RvWtq+7XqTlTCg==" length="1911175"/>
     </item>
+      <item>
+      <title>Version 1.0.3</title>
+      <pubDate>Thu, 28 May 2026 14:37:05 +0000</pubDate>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+      <description><![CDATA[Test release to verify the auto-updater.
+
+• Filler change one — tweaked some pixels
+• Filler change two — adjusted a label
+• Filler change three — nothing to see here]]></description>
+      <enclosure
+        url="https://github.com/moshed/Beam/releases/download/v1.0.3/Beam.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="I0yrklzhrboR5JttHYe39mALOlRL7JWgwbKHcwRuJvaJCK17+k0qhg1CmX5avl9ncj0/TdaBbWHY+3lcD2dhCQ==" length="1914853"/>
+    </item>
   </channel>
 </rss>

@@ -82,12 +82,14 @@ struct MathEvaluator {
     /// Handles: "$6 7 8.9 6", "add $5 10 20", "$1 + 1eur", "$100 + €50 + £30"
     /// If even ONE token has a currency, bare numbers inherit that currency.
     private static func evaluateCurrencyMath(_ input: String) -> (expression: String, result: String)? {
-        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        // Drop "~" (approximately) so it doesn't hide an "x"-multiplication (e.g. "18 x ~$5").
+        let trimmed = input.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "~", with: "")
 
-        // If the expression has parentheses, multiplication, division, or power — it's a math expression, not a currency sum
+        // If the expression has parentheses, multiplication, division, or power — it's a math expression, not a currency sum.
+        // "x"/"×" followed by a number or currency (e.g. "18 x $5", "18 x $.70") is multiplication too.
         if trimmed.contains("(") || trimmed.contains(")") || trimmed.contains("*") ||
            trimmed.contains("/") || trimmed.contains("^") ||
-           trimmed.range(of: #"[xX]\s*\d"#, options: .regularExpression) != nil {
+           trimmed.range(of: #"[xX×]\s*[\d$€£¥₪.]"#, options: .regularExpression) != nil {
             return nil
         }
 
@@ -238,7 +240,8 @@ struct MathEvaluator {
 
     private static func evaluateNaturalLanguage(_ input: String) -> (expression: String, result: String)? {
         let lower = input.lowercased()
-        let parts = lower.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        // Split on newlines too, so pasted columns work (e.g. "sum\n4\n1.5\n2").
+        let parts = lower.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         guard parts.count >= 2 else { return nil }
 
         let keyword = parts[0]
@@ -1378,9 +1381,11 @@ struct MathEvaluator {
     // MARK: - Standard Math Expression
 
     private static func evaluateExpression(_ input: String) -> (expression: String, result: String)? {
-        // Pre-process: convert x/X to * first so abbreviations hit a word boundary (e.g. "2kx10" -> "2k*10")
         var expr = input
-        // Convert x/X to * (multiply) — use loop since matches can overlap (e.g. "2x3x4")
+        // Strip currency symbols and "~" (approximately) up front so they don't block the
+        // "x"→"*" conversion (e.g. "18 x ~$.70" — both sat between "x" and the number).
+        expr = expr.replacingOccurrences(of: #"[\$€£¥₪~]"#, with: "", options: .regularExpression)
+        // Convert x/X to * (multiply) — loop since matches can overlap (e.g. "2x3x4")
         while let range = expr.range(of: #"([\d\w)])\s*[xX]\s*(?=[\d.(])"#, options: .regularExpression) {
             let matched = String(expr[range])
             let replacement = String(matched.prefix(while: { $0 != "x" && $0 != "X" })) + "*"
@@ -1389,8 +1394,6 @@ struct MathEvaluator {
         expr = expandAbbreviations(expr)
         // Strip thousands-separator commas (digit,digit patterns)
         expr = expr.replacingOccurrences(of: #"(\d),(\d)"#, with: "$1$2", options: .regularExpression)
-        // Strip stray currency symbols that aren't part of a valid currency pattern
-        expr = expr.replacingOccurrences(of: #"[\$€£¥₪]"#, with: "", options: .regularExpression)
         // √25 or √ 25 or √(25) -> sqrt(25)
         expr = expr.replacingOccurrences(
             of: #"√\s*\(([^)]+)\)"#,
@@ -1409,6 +1412,15 @@ struct MathEvaluator {
         expr = expr.replacingOccurrences(
             of: #"([\d.]+)\s*%(?!\s*[\d.(])"#,
             with: "($1*0.01)",
+            options: .regularExpression
+        )
+
+        // Remove parenthetical annotations: "(...)" that contain a letter but no math
+        // operator — e.g. "(hard 2 piece box)" is a note, not "(2 + 3)". Done before
+        // token stripping so a bare number inside the note doesn't get left behind.
+        expr = expr.replacingOccurrences(
+            of: #"\([^()+\-*/^]*[a-zA-Z][^()+\-*/^]*\)"#,
+            with: "",
             options: .regularExpression
         )
 
@@ -1491,16 +1503,16 @@ struct MathEvaluator {
             return (expression: input, result: "\(pctStr)%")
         }
 
-        // If the original input had a leading currency symbol, prefix the result and round to 2 decimals
-        if let first = input.trimmingCharacters(in: CharacterSet(charactersIn: "( ")).first,
-           "$€£¥₪".contains(first) {
+        // If the input contains a currency symbol anywhere (e.g. "18 x $.70"), prefix the
+        // result with that symbol and round to 2 decimals.
+        if let symbol = input.first(where: { "$€£¥₪".contains($0) }) {
             let currencyFmt = NumberFormatter()
             currencyFmt.numberStyle = .decimal
             currencyFmt.minimumFractionDigits = 2
             currencyFmt.maximumFractionDigits = 2
             currencyFmt.usesGroupingSeparator = true
             let rounded = currencyFmt.string(from: NSNumber(value: doubleVal)) ?? formatted
-            return (expression: input, result: String(first) + rounded)
+            return (expression: input, result: String(symbol) + rounded)
         }
         return (expression: input, result: formatted)
     }
@@ -1709,7 +1721,9 @@ struct MathEvaluator {
     }
 
     private static func addThousandsSeparators(_ s: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"\d+(\.\d+)?"#) else { return s }
+        // Match a full number including leading-dot decimals (".5593") so the fractional
+        // part never gets a thousands comma.
+        guard let regex = try? NSRegularExpression(pattern: #"\d+\.\d+|\.\d+|\d+"#) else { return s }
         let ns = s as NSString
         var result = ""
         var lastEnd = 0
@@ -1722,14 +1736,17 @@ struct MathEvaluator {
         return result
     }
 
+    /// Group only the integer part with thousands separators; leave the fractional part
+    /// untouched (and don't touch leading-dot decimals like ".5593").
     private static func groupNumber(_ numStr: String) -> String {
-        let parts = numStr.split(separator: ".", maxSplits: 1).map(String.init)
-        guard let intVal = Int(parts[0]) else { return numStr }
+        let comps = numStr.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        let intPart = comps[0]
+        guard !intPart.isEmpty, let intVal = Int(intPart) else { return numStr }
         let f = NumberFormatter()
         f.numberStyle = .decimal
         f.usesGroupingSeparator = true
         guard let grouped = f.string(from: NSNumber(value: intVal)) else { return numStr }
-        return parts.count > 1 ? "\(grouped).\(parts[1])" : grouped
+        return comps.count > 1 ? "\(grouped).\(comps[1])" : grouped
     }
 
     // MARK: - Formatting

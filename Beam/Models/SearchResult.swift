@@ -12,6 +12,7 @@ enum SearchResultType: String, CaseIterable {
     case emoji = "Emoji"
     case unicode = "Unicode"
     case timezone = "Time Zone"
+    case place = "Place"
     case ai = "Ask AI"
 
     var sectionOrder: Int {
@@ -31,6 +32,7 @@ enum SearchResultType: String, CaseIterable {
         case .emoji: return "face.smiling"
         case .unicode: return "textformat.abc"
         case .timezone: return "clock.fill"
+        case .place: return "mappin.and.ellipse"
         case .ai: return "sparkles"
         }
     }
@@ -38,7 +40,16 @@ enum SearchResultType: String, CaseIterable {
 
 struct ResultAction {
     let name: String
+    /// Whether firing this action should also close the Beam panel. Most do; a few
+    /// (e.g. "Use as input") want to keep typing in the bar.
+    let dismissesPanel: Bool
     let handler: () -> Void
+
+    init(name: String, dismissesPanel: Bool = true, handler: @escaping () -> Void) {
+        self.name = name
+        self.dismissesPanel = dismissesPanel
+        self.handler = handler
+    }
 }
 
 struct DetailItem {

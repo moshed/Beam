@@ -37,6 +37,8 @@
 		A10028 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10031; };
 		A10029 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = SP0001 /* Sparkle */; };
 		A10030 /* UpdatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10032; };
+		A10031 /* ContinuityDialer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10033; };
+		A10032 /* PlacesSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10034; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -72,6 +74,8 @@
 		B10030 /* OllamaSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaSearcher.swift; sourceTree = "<group>"; };
 		B10031 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		B10032 /* UpdatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdatesView.swift; sourceTree = "<group>"; };
+		B10033 /* ContinuityDialer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuityDialer.swift; sourceTree = "<group>"; };
+		B10034 /* PlacesSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacesSearcher.swift; sourceTree = "<group>"; };
 		P10001 /* Beam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Beam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -143,6 +147,8 @@
 				B10027 /* TimeZoneSearcher.swift */,
 				B10028 /* HistoryManager.swift */,
 				B10030 /* OllamaSearcher.swift */,
+				B10033 /* ContinuityDialer.swift */,
+				B10034 /* PlacesSearcher.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -331,6 +337,8 @@
 				A10027 /* OllamaSearcher.swift in Sources */,
 				A10028 /* ChatView.swift in Sources */,
 				A10030 /* UpdatesView.swift in Sources */,
+				A10031 /* ContinuityDialer.swift in Sources */,
+				A10032 /* PlacesSearcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

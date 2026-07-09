@@ -43,7 +43,7 @@ class DictionarySearcher {
                 DetailItem(label: "", value: line, icon: nil, actions: [
                     ResultAction(name: "Copy") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(line, forType: .string)
+                        NSPasteboard.general.beamSet(line)
                     }
                 ])
             }
@@ -56,11 +56,11 @@ class DictionarySearcher {
             actions: [
                 ResultAction(name: "Copy definition") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("\(defWord): \(fullDef)", forType: .string)
+                    NSPasteboard.general.beamSet("\(defWord): \(fullDef)")
                 },
                 ResultAction(name: "Copy word") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(defWord, forType: .string)
+                    NSPasteboard.general.beamSet(defWord)
                 },
             ],
             details: detailItems

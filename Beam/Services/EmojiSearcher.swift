@@ -139,11 +139,11 @@ class EmojiSearcher {
                     },
                     ResultAction(name: "Copy") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(emoji, forType: .string)
+                        NSPasteboard.general.beamSet(emoji)
                     },
                     ResultAction(name: "Copy name") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(name, forType: .string)
+                        NSPasteboard.general.beamSet(name)
                     },
                 ]
             )
@@ -180,11 +180,11 @@ class EmojiSearcher {
                         },
                         ResultAction(name: "Copy") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(char, forType: .string)
+                            NSPasteboard.general.beamSet(char)
                         },
                         ResultAction(name: "Copy name") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(displayName, forType: .string)
+                            NSPasteboard.general.beamSet(displayName)
                         },
                     ]
                 )]
@@ -243,11 +243,11 @@ class EmojiSearcher {
                             },
                             ResultAction(name: "Copy") {
                                 NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(char, forType: .string)
+                                NSPasteboard.general.beamSet(char)
                             },
                             ResultAction(name: "Copy name") {
                                 NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(displayName, forType: .string)
+                                NSPasteboard.general.beamSet(displayName)
                             },
                         ]
                     ))
@@ -260,12 +260,39 @@ class EmojiSearcher {
         return results
     }
 
+    /// Common search terms that don't appear in Unicode names — map to aliases that do.
+    /// E.g. searching "laugh" should also surface 😂 (FACE WITH TEARS OF JOY).
+    private static let aliases: [String: [String]] = [
+        "smile":    ["smiling", "grin", "joy"],
+        "laugh":    ["laughing", "tears of joy", "rolling on the floor"],
+        "lol":      ["tears of joy", "laughing"],
+        "haha":     ["tears of joy", "laughing"],
+        "happy":    ["grin", "smil", "joy"],
+        "sad":      ["frown", "pensive", "tear", "sob", "cry"],
+        "cry":      ["tear", "sob", "loudly crying"],
+        "angry":    ["pouting", "rage", "anger"],
+        "mad":      ["pouting", "rage", "angry"],
+        "love":     ["heart", "kiss"],
+        "shock":    ["astonished", "open mouth"],
+        "surprise": ["astonished", "open mouth", "surprised"],
+        "wow":      ["astonished", "open mouth"],
+        "yes":      ["check mark", "thumbs up"],
+        "no":       ["cross mark", "thumbs down", "prohibited"],
+        "ok":       ["ok hand", "check mark"],
+    ]
+
     /// Match keyword against name: exact substring OR any word in name starts with the keyword.
-    /// Also tries the singular form (drops trailing 's') so "arrows" matches "ARROW".
+    /// Also tries the singular form (drops trailing 's') and the stem (drops trailing 'e')
+    /// so "arrows" matches "ARROW" and "smile" matches "SMILING". Falls back to aliases
+    /// for common terms that don't appear in Unicode names.
     private func matchesKeyword(_ name: String, _ keyword: String) -> Bool {
         if checkKeyword(name, keyword) { return true }
-        if keyword.count > 3 && keyword.hasSuffix("s") {
-            return checkKeyword(name, String(keyword.dropLast()))
+        if keyword.count > 3 {
+            if keyword.hasSuffix("s") && checkKeyword(name, String(keyword.dropLast())) { return true }
+            if keyword.hasSuffix("e") && checkKeyword(name, String(keyword.dropLast())) { return true }
+        }
+        if let aliases = Self.aliases[keyword] {
+            for alias in aliases where checkKeyword(name, alias) { return true }
         }
         return false
     }

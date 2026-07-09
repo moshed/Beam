@@ -178,7 +178,7 @@ class OllamaSearcher {
                 } completion: {
                     DispatchQueue.main.async {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(collected, forType: .string)
+                        NSPasteboard.general.beamSet(collected)
                     }
                 }
             }

@@ -26,6 +26,40 @@ struct SettingsView: View {
     }
 }
 
+/// Bigger, primary-color section title so Form-grouped sections read as
+/// real headings — Form's default header is small and low-contrast.
+private struct SectionTitle: View {
+    let text: String
+    let systemImage: String?
+    init(_ text: String, systemImage: String? = nil) {
+        self.text = text
+        self.systemImage = systemImage
+    }
+    var body: some View {
+        HStack(spacing: 6) {
+            if let sys = systemImage {
+                Image(systemName: sys).font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(text)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+                .textCase(nil)
+        }
+        .padding(.top, 4)
+    }
+}
+
+/// Lightweight caption used under a control (label + help).
+private struct SectionHint: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+}
+
 struct GeneralSettingsTab: View {
     @ObservedObject var settings: SettingsManager
     @Binding var isRecordingShortcut: Bool
@@ -37,101 +71,44 @@ struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Startup") {
-                Toggle("Launch Beam at login", isOn: $settings.launchAtLogin)
-            }
+            Section { Toggle("Launch Beam at login", isOn: $settings.launchAtLogin) }
+                header: { SectionTitle("Startup", systemImage: "power") }
 
-            Section("Shortcuts") {
+            Section {
                 HStack {
                     Text("Activate Beam")
                     Spacer()
-                    ShortcutRecorderView(
-                        combo: $settings.toggleShortcut,
-                        isRecording: $isRecordingShortcut,
-                        allowBareKeys: false
-                    )
+                    ShortcutRecorderView(combo: $settings.toggleShortcut,
+                                         isRecording: $isRecordingShortcut, allowBareKeys: false)
                 }
                 HStack {
                     Text("Show History")
                     Spacer()
-                    ShortcutRecorderView(
-                        combo: $settings.historyShortcut,
-                        isRecording: $isRecordingHistoryShortcut,
-                        allowBareKeys: true
-                    )
+                    ShortcutRecorderView(combo: $settings.historyShortcut,
+                                         isRecording: $isRecordingHistoryShortcut, allowBareKeys: true)
                 }
-                Text("Triggers when search bar is empty")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionHint(text: "Triggers when search bar is empty.")
                 HStack {
                     Text("Expand Result")
                     Spacer()
-                    ShortcutRecorderView(
-                        combo: $settings.expandShortcut,
-                        isRecording: $isRecordingExpandShortcut,
-                        allowBareKeys: true
-                    )
+                    ShortcutRecorderView(combo: $settings.expandShortcut,
+                                         isRecording: $isRecordingExpandShortcut, allowBareKeys: true)
                 }
                 HStack {
                     Text("Collapse Result")
                     Spacer()
-                    ShortcutRecorderView(
-                        combo: $settings.collapseShortcut,
-                        isRecording: $isRecordingCollapseShortcut,
-                        allowBareKeys: true
-                    )
+                    ShortcutRecorderView(combo: $settings.collapseShortcut,
+                                         isRecording: $isRecordingCollapseShortcut, allowBareKeys: true)
                 }
-            }
+            } header: { SectionTitle("Shortcuts", systemImage: "keyboard") }
 
-            Section("History") {
-                HStack {
-                    Text("\(HistoryManager.shared.entries.count) entries")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Clear History") {
-                        HistoryManager.shared.clearHistory()
-                    }
-                    .foregroundStyle(.red)
-                }
-            }
-
-            Section("Ask AI") {
-                HStack {
-                    Text("Model")
-                    Spacer()
-                    if loadingModels {
-                        ProgressView().controlSize(.small)
-                    } else if ollamaModels.isEmpty {
-                        Text("No models found").foregroundStyle(.secondary).font(.caption)
-                    } else {
-                        Picker("", selection: $settings.ollamaModel) {
-                            Text("Auto").tag("")
-                            ForEach(ollamaModels, id: \.self) { name in
-                                Text(name).tag(name)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(maxWidth: 240)
-                    }
-                    Button(action: refreshModels) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.borderless)
-                }
-                Text("\"Auto\" picks the first model Ollama returns. Refresh after installing new models with `ollama pull`.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Display") {
+            Section {
                 Picker("Default Result View", selection: $settings.resultDisplayMode) {
                     ForEach(ResultDisplayMode.allCases, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
                 }
-                Text("Press Tab in search to toggle between views")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SectionHint(text: "Press Tab in search to toggle between views.")
 
                 if settings.resultDisplayMode == .grouped {
                     Text("Section Order")
@@ -142,16 +119,13 @@ struct GeneralSettingsTab: View {
                         ForEach(settings.sectionOrder, id: \.self) { name in
                             HStack(spacing: 8) {
                                 Image(systemName: "line.3.horizontal")
-                                    .foregroundStyle(.tertiary)
-                                    .font(.system(size: 11))
+                                    .foregroundStyle(.tertiary).font(.system(size: 11))
                                 if let type = SearchResultType.allCases.first(where: { $0.rawValue == name }) {
                                     Image(systemName: type.iconName)
-                                        .frame(width: 16)
-                                        .foregroundStyle(.secondary)
+                                        .frame(width: 16).foregroundStyle(.secondary)
                                         .font(.system(size: 11))
                                 }
-                                Text(name)
-                                    .font(.system(size: 12))
+                                Text(name).font(.system(size: 12))
                             }
                             .padding(.vertical, 1)
                         }
@@ -167,7 +141,116 @@ struct GeneralSettingsTab: View {
                     }
                     .font(.caption)
                 }
-            }
+            } header: { SectionTitle("Display", systemImage: "sidebar.squares.left") }
+
+            Section {
+                HStack {
+                    Text("Default calendar")
+                    Spacer()
+                    Picker("", selection: $settings.defaultQuickAddCalendarID) {
+                        Text("System default").tag("")
+                        ForEach(AppDelegate.shared?.searchCoordinator.calendarSearcher.writableCalendars() ?? [],
+                                id: \.calendarIdentifier) { cal in
+                            Text(cal.title).tag(cal.calendarIdentifier)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
+                }
+                SectionHint(text: "New quick-add events land here when you press Enter. Shift+Enter shows all calendars.")
+            } header: { SectionTitle("Calendar", systemImage: "calendar") }
+
+            Section {
+                HStack {
+                    Text("Postpone offset")
+                    Spacer()
+                    Button(action: {
+                        settings.reminderDueDateOffsetMinutes = max(1, settings.reminderDueDateOffsetMinutes - 5)
+                    }) { Image(systemName: "minus").frame(width: 20, height: 20) }
+                        .buttonStyle(.bordered)
+                    TextField("", value: $settings.reminderDueDateOffsetMinutes, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60).multilineTextAlignment(.center)
+                    Button(action: {
+                        settings.reminderDueDateOffsetMinutes = min(10080, settings.reminderDueDateOffsetMinutes + 5)
+                    }) { Image(systemName: "plus").frame(width: 20, height: 20) }
+                        .buttonStyle(.bordered)
+                    Text(offsetLabel(settings.reminderDueDateOffsetMinutes))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                SectionHint(text: "How far ahead to push a reminder's due date when you use \"Postpone\".")
+            } header: { SectionTitle("Reminders", systemImage: "checklist") }
+
+            Section {
+                HStack {
+                    Text("Model")
+                    Spacer()
+                    if loadingModels {
+                        ProgressView().controlSize(.small)
+                    } else if ollamaModels.isEmpty {
+                        Text("No models found").foregroundStyle(.secondary).font(.caption)
+                    } else {
+                        Picker("", selection: $settings.ollamaModel) {
+                            Text("Auto").tag("")
+                            ForEach(ollamaModels, id: \.self) { name in Text(name).tag(name) }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 240)
+                    }
+                    Button(action: refreshModels) { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless)
+                }
+                SectionHint(text: "\"Auto\" picks the first model Ollama returns. Refresh after installing new models with `ollama pull`.")
+            } header: { SectionTitle("Ask AI", systemImage: "sparkles") }
+
+            Section {
+                ForEach(settings.keepOpenAppBundleIDs, id: \.self) { bid in
+                    HStack(spacing: 8) {
+                        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                                .resizable().frame(width: 18, height: 18)
+                            Text(FileManager.default.displayName(atPath: url.path))
+                                .font(.system(size: 12))
+                        } else {
+                            Image(systemName: "questionmark.app").frame(width: 18, height: 18)
+                            Text(bid).font(.system(size: 11, design: .monospaced))
+                        }
+                        Spacer()
+                        Button {
+                            settings.keepOpenAppBundleIDs.removeAll { $0 == bid }
+                        } label: {
+                            Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Button("Add Application…") {
+                    let panel = NSOpenPanel()
+                    panel.directoryURL = URL(fileURLWithPath: "/Applications")
+                    panel.canChooseFiles = true
+                    panel.canChooseDirectories = false
+                    panel.allowsMultipleSelection = false
+                    panel.allowedFileTypes = ["app"]
+                    if panel.runModal() == .OK, let url = panel.url,
+                       let bid = Bundle(url: url)?.bundleIdentifier,
+                       !settings.keepOpenAppBundleIDs.contains(bid) {
+                        settings.keepOpenAppBundleIDs.append(bid)
+                    }
+                }
+                SectionHint(text: "These apps don't dismiss Beam when activated. Others still do.")
+            } header: { SectionTitle("Keep Beam Open", systemImage: "pin.fill") }
+
+            Section {
+                HStack {
+                    Text("\(HistoryManager.shared.entries.count) entries")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear History") {
+                        HistoryManager.shared.clearHistory()
+                    }
+                    .foregroundStyle(.red)
+                }
+            } header: { SectionTitle("History", systemImage: "clock.arrow.circlepath") }
         }
         .formStyle(.grouped)
         .onAppear { refreshModels() }
@@ -183,20 +266,28 @@ struct GeneralSettingsTab: View {
             }
         }
     }
+
+    private func offsetLabel(_ minutes: Int) -> String {
+        if minutes < 60 { return "\(minutes) min" }
+        let hrs = minutes / 60
+        let mins = minutes % 60
+        if mins == 0 { return hrs == 1 ? "1 hour" : "\(hrs) hours" }
+        return "\(hrs)h \(mins)m"
+    }
 }
 
 struct ActionsSettingsTab: View {
     @ObservedObject var settings: SettingsManager
-    private let types: [SearchResultType] = [.math, .app, .contact, .file, .shortcut, .definition, .reminder, .calendar, .emoji, .unicode, .timezone, .ai]
+    private let types: [SearchResultType] = [.math, .app, .contact, .file, .shortcut, .definition, .reminder, .calendar, .place, .emoji, .unicode, .timezone, .ai]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 20) {
                 Text("Configure what Enter, Shift+Enter, and Option+Enter do for each result type.")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
 
                 ForEach(types, id: \.rawValue) { type in
                     let available = CategoryActions.available[type] ?? []
@@ -205,7 +296,7 @@ struct ActionsSettingsTab: View {
                     }
                 }
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, 20)
         }
     }
 }
@@ -218,85 +309,46 @@ struct CategoryActionSection: View {
     private let slotLabels = ["↵ Enter", "⇧ Shift+Enter", "⌥ Option+Enter"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
                 Image(systemName: type.iconName)
-                    .font(.system(size: 12))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
                 Text(type.rawValue)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 20)
 
-            ForEach(0..<min(available.count, 3), id: \.self) { slot in
-                HStack {
-                    Text(slotLabels[slot])
-                        .font(.system(size: 11, design: .monospaced))
-                        .frame(width: 120, alignment: .leading)
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 6) {
+                ForEach(0..<min(available.count, 3), id: \.self) { slot in
+                    HStack {
+                        Text(slotLabels[slot])
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(width: 130, alignment: .leading)
+                            .foregroundStyle(.secondary)
 
-                    Picker("", selection: Binding(
-                        get: { settings.actionIndex(for: type, slot: slot) },
-                        set: { settings.setActionIndex(for: type, slot: slot, actionIdx: $0) }
-                    )) {
-                        ForEach(0..<available.count, id: \.self) { idx in
-                            Text(available[idx]).tag(idx)
+                        Picker("", selection: Binding(
+                            get: { settings.actionIndex(for: type, slot: slot) },
+                            set: { settings.setActionIndex(for: type, slot: slot, actionIdx: $0) }
+                        )) {
+                            ForEach(0..<available.count, id: \.self) { idx in
+                                Text(available[idx]).tag(idx)
+                            }
                         }
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity)
                     }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 16)
             }
-
-            if type == .reminder {
-                HStack {
-                    Text("Postpone offset")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 120, alignment: .leading)
-
-                    Button(action: {
-                        settings.reminderDueDateOffsetMinutes = max(1, settings.reminderDueDateOffsetMinutes - 5)
-                    }) {
-                        Image(systemName: "minus")
-                            .frame(width: 20, height: 20)
-                    }
-                    .buttonStyle(.bordered)
-
-                    TextField("", value: $settings.reminderDueDateOffsetMinutes, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 50)
-                        .multilineTextAlignment(.center)
-
-                    Button(action: {
-                        settings.reminderDueDateOffsetMinutes = min(10080, settings.reminderDueDateOffsetMinutes + 5)
-                    }) {
-                        Image(systemName: "plus")
-                            .frame(width: 20, height: 20)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Text(offsetLabel(settings.reminderDueDateOffsetMinutes))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 16)
-            }
+            .padding(.horizontal, 20)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 12)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.05))
-                .padding(.horizontal, 8)
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.secondary.opacity(0.06))
+                .padding(.horizontal, 12)
         )
-    }
-
-    private func offsetLabel(_ minutes: Int) -> String {
-        if minutes < 60 { return "\(minutes) min" }
-        let hrs = minutes / 60
-        let mins = minutes % 60
-        if mins == 0 { return hrs == 1 ? "1 hour" : "\(hrs) hours" }
-        return "\(hrs)h \(mins)m"
     }
 }
 

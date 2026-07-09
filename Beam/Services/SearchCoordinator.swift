@@ -117,7 +117,8 @@ class SearchCoordinator {
     private let appSearcher = AppSearcher()
     private let contactSearcher = ContactSearcher()
     private let fileSearcher = FileSearcher()
-    private let calendarSearcher = CalendarSearcher()
+    private let placesSearcher = PlacesSearcher()
+    let calendarSearcher = CalendarSearcher()
     private let shortcutSearcher = ShortcutSearcher()
     private let dictionarySearcher = DictionarySearcher()
     private let emojiSearcher = EmojiSearcher()
@@ -245,10 +246,17 @@ class SearchCoordinator {
         guard !result.actions.isEmpty else { return true }
         let actionIdx = SettingsManager.shared.actionIndex(for: result.type, slot: slot)
         let clampedIdx = min(actionIdx, result.actions.count - 1)
-        result.actions[max(0, clampedIdx)].handler()
-        // If the action transitioned us into chat mode, keep the panel open.
+        let action = result.actions[max(0, clampedIdx)]
+        NSLog("[BEAM-DIAL] executeAction slot=%d resultType=%@ title=%@ action=%@",
+              slot, result.type.rawValue, result.title, action.name)
+        action.handler()
         if isChatMode { return false }
-        return true
+        return action.dismissesPanel
+    }
+
+    /// Drop a math result into the search bar so the user can keep computing.
+    func useAsInput(_ text: String) {
+        queryChanged(text)
     }
 
     func executeSelected() -> Bool { executeAction(slot: 0) }
@@ -390,12 +398,18 @@ class SearchCoordinator {
     /// Execute action on the currently focused item
     func executeFocusedAction(slot: Int) -> Bool {
         let actions = focusedActions
+        NSLog("[BEAM-DIAL] executeFocusedAction slot=%d actionsCount=%d expandedDetail=%@ query=%@",
+              slot, actions.count,
+              expandedDetailIndex.map(String.init) ?? "nil",
+              query)
         guard !actions.isEmpty else { return false }
 
         // If on a detail item, execute its action directly
         if expandedDetailIndex != nil {
             let idx = min(slot, actions.count - 1)
-            actions[max(0, idx)].handler()
+            let picked = actions[max(0, idx)]
+            NSLog("[BEAM-DIAL] detail action=%@", picked.name)
+            picked.handler()
             return true
         }
 
@@ -548,11 +562,20 @@ class SearchCoordinator {
     private func performSearch(_ q: String) {
         var merged: [SearchResult] = []
 
+        // If the query looks like a phone number, don't show a math result — parens
+        // and dashes would otherwise be parsed as grouping/subtraction.
+        let phone = Self.phoneNumberResult(for: q).map { [$0] } ?? []
+        if !phone.isEmpty {
+            mathResultInfo = nil
+        }
+
         if let math = mathResultInfo {
             let resultText = math.result
             let exprText = math.expression
             let isInfo = math.isInfo
-            let title = isInfo ? resultText : "= \(resultText)"
+            // Visually drop the "=" — the icon already conveys it. Copy actions
+            // (which use exprText + " = " + resultText) still produce the full string.
+            let title = resultText
             let icon = isInfo ? "calendar.circle.fill" : "equal.circle.fill"
             let separator = isInfo ? " is " : " = "
             var mathRow = SearchResult(
@@ -563,13 +586,21 @@ class SearchCoordinator {
                 actions: [
                     ResultAction(name: "Copy result") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(resultText, forType: .string)
+                        NSPasteboard.general.beamSet(resultText)
                     },
                     ResultAction(name: "Copy query + result") {
                         let lhs = isInfo ? exprText
                             : MathEvaluator.normalizeExpression(exprText, expectedResult: resultText)
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString("\(lhs)\(separator)\(resultText)", forType: .string)
+                        NSPasteboard.general.beamSet("\(lhs)\(separator)\(resultText)")
+                    },
+                    ResultAction(name: "Use as input", dismissesPanel: false) {
+                        // Extract just the numeric portion (strip currency/unit suffix
+                        // and thousands commas) so it can be used in further math.
+                        let m = resultText.range(of: #"-?[\d,]+(?:\.\d+)?"#, options: .regularExpression)
+                        let numeric = m.map { String(resultText[$0]) } ?? resultText
+                        let clean = numeric.replacingOccurrences(of: ",", with: "")
+                        AppDelegate.shared?.searchCoordinator.useAsInput(clean)
                     },
                 ]
             )
@@ -591,18 +622,49 @@ class SearchCoordinator {
                     actions: [
                         ResultAction(name: "Copy result") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(secText, forType: .string)
+                            NSPasteboard.general.beamSet(secText)
                         },
                         ResultAction(name: "Copy query + result") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("\(secondary.expression) = \(secText)", forType: .string)
+                            NSPasteboard.general.beamSet("\(secondary.expression) = \(secText)")
+                        },
+                        ResultAction(name: "Use as input", dismissesPanel: false) {
+                            AppDelegate.shared?.searchCoordinator.useAsInput(secText)
                         },
                     ]
                 ))
             }
 
-            // Third row when a bare "m" makes the input ambiguous (metres vs million):
-            // the pure-arithmetic interpretation, e.g. "1m x 1000" → 1,000,000,000.
+            // Volume in the SOURCE unit — raw product, no conversion (e.g.
+            // "375 * 285 * 1,065mm" → "113,821,875 mm³"). Skipped when source == target
+            // (the primary row already shows that).
+            if let srcVol = MathEvaluator.dimensionsSourceVolume(q) {
+                let sText = srcVol.result
+                merged.append(SearchResult(
+                    type: .math,
+                    title: sText,
+                    subtitle: "\(srcVol.expression) (source units)",
+                    icon: NSImage(systemSymbolName: "cube", accessibilityDescription: nil),
+                    actions: [
+                        ResultAction(name: "Copy result") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.beamSet(sText)
+                        },
+                        ResultAction(name: "Copy query + result") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.beamSet("\(srcVol.expression) = \(sText)")
+                        },
+                        ResultAction(name: "Use as input", dismissesPanel: false) {
+                            let m = sText.range(of: #"-?[\d,]+(?:\.\d+)?"#, options: .regularExpression)
+                            let numeric = m.map { String(sText[$0]) } ?? sText
+                            AppDelegate.shared?.searchCoordinator.useAsInput(numeric.replacingOccurrences(of: ",", with: ""))
+                        },
+                    ]
+                ))
+            }
+
+            // Pure-arithmetic interpretation when a bare "m" makes the input ambiguous
+            // (metres vs million): "1m x 1000" → 1,000,000,000.
             if let arith = MathEvaluator.dimensionArithmetic(q) {
                 let aResult = arith.result
                 let aExpr = arith.expression
@@ -614,11 +676,16 @@ class SearchCoordinator {
                     actions: [
                         ResultAction(name: "Copy result") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(aResult, forType: .string)
+                            NSPasteboard.general.beamSet(aResult)
                         },
                         ResultAction(name: "Copy query + result") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("\(aExpr) = \(aResult)", forType: .string)
+                            NSPasteboard.general.beamSet("\(aExpr) = \(aResult)")
+                        },
+                        ResultAction(name: "Use as input", dismissesPanel: false) {
+                            let m = aResult.range(of: #"-?[\d,]+(?:\.\d+)?"#, options: .regularExpression)
+                            let numeric = m.map { String(aResult[$0]) } ?? aResult
+                            AppDelegate.shared?.searchCoordinator.useAsInput(numeric.replacingOccurrences(of: ",", with: ""))
                         },
                     ]
                 ))
@@ -632,6 +699,7 @@ class SearchCoordinator {
         let contacts = contactSearcher.search(q)
         let events = calendarSearcher.searchEvents(q)
         let reminders = calendarSearcher.searchReminders(q)
+        let quickAdd = calendarSearcher.quickAddEvent(q)
         let emoji = emojiSearcher.search(q)
         let unicode = emojiSearcher.searchUnicode(q)
         let ai = ollamaSearcher.search(q)
@@ -640,7 +708,9 @@ class SearchCoordinator {
         merged.append(contentsOf: definitions)
         merged.append(contentsOf: apps)
         merged.append(contentsOf: shortcuts)
+        merged.append(contentsOf: phone)
         merged.append(contentsOf: contacts)
+        merged.append(contentsOf: quickAdd)
         merged.append(contentsOf: events)
         merged.append(contentsOf: reminders)
         merged.append(contentsOf: emoji)
@@ -661,5 +731,84 @@ class SearchCoordinator {
             let nonFileResults = self.results.filter { $0.type != .file }
             self.results = nonFileResults + fileResults
         }
+
+        placesSearcher.search(q) { [weak self] queryUsed, placeResults in
+            guard let self = self, self.query == queryUsed else { return }
+            let existing = self.results.filter { $0.type != .place }
+            self.results = existing + placeResults
+        }
     }
+
+    /// Recognise a query that looks like a phone number and return a callable result.
+    /// Accepts `+1 (555) 555-5555`, `555-555-5555`, `5555555555`, etc. — 7–15 digits,
+    /// only phone punctuation allowed.
+    private static func phoneNumberResult(for query: String) -> SearchResult? {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        // Reject anything with letters — a phone number has none.
+        guard trimmed.range(of: "[A-Za-z]", options: .regularExpression) == nil else { return nil }
+        let digits = trimmed.filter { $0.isNumber }
+        guard (7...15).contains(digits.count) else { return nil }
+        // Every char must be a digit or standard phone punctuation.
+        let allowed = CharacterSet(charactersIn: "+-()., ").union(.decimalDigits)
+        guard trimmed.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+
+        // Normalise to E.164 — FaceTime only triggers the Continuity cellular call
+        // when it receives a properly-formatted international number.
+        let dial: String
+        if trimmed.hasPrefix("+") {
+            dial = "+\(digits)"
+        } else if digits.count == 10 {
+            dial = "+1\(digits)"           // assume NANP if bare 10-digit
+        } else if digits.count == 11, digits.hasPrefix("1") {
+            dial = "+\(digits)"
+        } else {
+            dial = "+\(digits)"
+        }
+        let display = formatUSPhone(digits) ?? dial
+
+        let call = URL(string: "tel:\(dial)")
+        let sms = URL(string: "sms:\(dial)")
+        let ft = URL(string: "facetime:\(dial)")
+
+        return SearchResult(
+            type: .contact,
+            title: display,
+            subtitle: "Phone number",
+            icon: NSImage(systemSymbolName: "phone.circle.fill", accessibilityDescription: nil),
+            actions: [
+                ResultAction(name: "Call") {
+                    if !ContinuityDialer.dial(dial), let url = call {
+                        NSWorkspace.shared.open(url)
+                    }
+                },
+                ResultAction(name: "Message") { sms.map { NSWorkspace.shared.open($0) } },
+                ResultAction(name: "FaceTime") { ft.map { NSWorkspace.shared.open($0) } },
+            ]
+        )
+    }
+
+    /// Format 10- or 11-digit numbers as US-style; return nil for other lengths.
+    private static func formatUSPhone(_ digits: String) -> String? {
+        let d = Array(digits)
+        switch d.count {
+        case 10:
+            return "(\(String(d[0..<3]))) \(String(d[3..<6]))-\(String(d[6..<10]))"
+        case 11 where d[0] == "1":
+            return "+1 (\(String(d[1..<4]))) \(String(d[4..<7]))-\(String(d[7..<11]))"
+        default:
+            return nil
+        }
+    }
+}
+
+/// Open a URL via its default handler WITHOUT bringing the handler app to the
+/// foreground. For `tel:` URLs on macOS this triggers the compact
+/// "Call [number] using iPhone?" prompt (Safari-style) instead of switching to
+/// the full FaceTime window.
+private func openWithoutActivating(_ url: URL) {
+    let config = NSWorkspace.OpenConfiguration()
+    config.activates = false
+    config.addsToRecentItems = false
+    NSWorkspace.shared.open(url, configuration: config, completionHandler: nil)
 }

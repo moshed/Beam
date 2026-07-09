@@ -5,8 +5,39 @@ class ContactSearcher {
     private let store = CNContactStore()
     private(set) var isAuthorized = false
 
+    /// (identifier, lowercased organizationName) — cached at startup and refreshed
+    /// on CNContactStore change notifications so per-keystroke org lookup is O(N)
+    /// over an in-memory array rather than a fresh CNContactFetchRequest.
+    private var orgIndex: [(id: String, org: String)] = []
+    private var orgIndexLoaded = false
+
     init() {
         checkAndRequestAccess()
+        NotificationCenter.default.addObserver(
+            forName: .CNContactStoreDidChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildOrgIndex() }
+    }
+
+    private func rebuildOrgIndex() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            let req = CNContactFetchRequest(keysToFetch: [
+                CNContactIdentifierKey as CNKeyDescriptor,
+                CNContactOrganizationNameKey as CNKeyDescriptor,
+            ])
+            req.unifyResults = true
+            var index: [(String, String)] = []
+            _ = try? self.store.enumerateContacts(with: req) { contact, _ in
+                let org = contact.organizationName
+                if !org.isEmpty {
+                    index.append((contact.identifier, org.lowercased()))
+                }
+            }
+            DispatchQueue.main.async {
+                self.orgIndex = index
+                self.orgIndexLoaded = true
+            }
+        }
     }
 
     func checkAndRequestAccess() {
@@ -14,10 +45,12 @@ class ContactSearcher {
         switch status {
         case .authorized:
             isAuthorized = true
+            rebuildOrgIndex()
         case .notDetermined:
             store.requestAccess(for: .contacts) { [weak self] granted, error in
                 DispatchQueue.main.async {
                     self?.isAuthorized = granted
+                    if granted { self?.rebuildOrgIndex() }
                     if !granted {
                         print("[Beam] Contacts access denied: \(error?.localizedDescription ?? "user denied")")
                     }
@@ -25,10 +58,22 @@ class ContactSearcher {
             }
         case .limited:
             isAuthorized = true
+            rebuildOrgIndex()
         default:
             isAuthorized = false
             print("[Beam] Contacts access status: \(status.rawValue) — grant in System Settings > Privacy & Security > Contacts")
         }
+    }
+
+    /// Normalise a phone-number string to E.164 (+1XXXXXXXXXX for bare US 10-digit).
+    private static func e164(_ raw: String) -> String {
+        let digits = raw.filter(\.isNumber)
+        if raw.trimmingCharacters(in: .whitespaces).hasPrefix("+") {
+            return "+\(digits)"
+        }
+        if digits.count == 10 { return "+1\(digits)" }
+        if digits.count == 11, digits.hasPrefix("1") { return "+\(digits)" }
+        return "+\(digits)"
     }
 
     func search(_ query: String) -> [SearchResult] {
@@ -53,15 +98,35 @@ class ContactSearcher {
             CNContactNoteKey as CNKeyDescriptor,
         ]
 
-        let predicate = CNContact.predicateForContacts(matchingName: trimmed)
-        guard let contacts = try? store.unifiedContacts(matching: predicate, keysToFetch: keysToFetch) else {
-            return []
+        // Match by name (given/family/composite) AND by organization name so
+        // business contacts with no first/last (e.g. "Fesco") still surface.
+        // Org lookup is served from a cached in-memory index built once at
+        // launch — cheap per keystroke.
+        let namePred = CNContact.predicateForContacts(matchingName: trimmed)
+        let nameHits = (try? store.unifiedContacts(matching: namePred, keysToFetch: keysToFetch)) ?? []
+
+        let lowerQ = trimmed.lowercased()
+        let nameHitIDs = Set(nameHits.map(\.identifier))
+        let orgIDs = orgIndex
+            .lazy
+            .filter { $0.org.contains(lowerQ) && !nameHitIDs.contains($0.id) }
+            .prefix(5)
+            .map(\.id)
+        let orgHits: [CNContact]
+        if orgIDs.isEmpty {
+            orgHits = []
+        } else {
+            let orgPred = CNContact.predicateForContacts(withIdentifiers: Array(orgIDs))
+            orgHits = (try? store.unifiedContacts(matching: orgPred, keysToFetch: keysToFetch)) ?? []
         }
+        let contacts = nameHits + orgHits
 
         return contacts.prefix(5).map { contact in
-            let name = [contact.givenName, contact.familyName]
+            var name = [contact.givenName, contact.familyName]
                 .filter { !$0.isEmpty }
                 .joined(separator: " ")
+            if name.isEmpty { name = contact.organizationName }
+            if name.isEmpty { name = contact.emailAddresses.first?.value as String? ?? "" }
 
             let phone = contact.phoneNumbers.first?.value.stringValue
             let email = contact.emailAddresses.first?.value as String?
@@ -84,15 +149,15 @@ class ContactSearcher {
                 }
             })
             if let ph = phone {
-                let dialNum = ph.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "-", with: "")
+                let dialNum = Self.e164(ph)
                 actions.append(ResultAction(name: "Call \(ph)") {
-                    if let url = URL(string: "tel:\(dialNum)") {
+                    if !ContinuityDialer.dial(dialNum), let url = URL(string: "tel:\(dialNum)") {
                         NSWorkspace.shared.open(url)
                     }
                 })
                 actions.append(ResultAction(name: "Copy number") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(ph, forType: .string)
+                    NSPasteboard.general.beamSet(ph)
                 })
             }
 
@@ -101,12 +166,16 @@ class ContactSearcher {
             for pn in contact.phoneNumbers {
                 let label = CNLabeledValue<NSString>.localizedString(forLabel: pn.label ?? "")
                 let num = pn.value.stringValue
-                let dialNum = num.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "-", with: "")
+                let dialNum = Self.e164(num)
                 details.append(DetailItem(
                     label: label, value: num, icon: "phone.fill",
                     actions: [
-                        ResultAction(name: "Call") { if let url = URL(string: "tel:\(dialNum)") { NSWorkspace.shared.open(url) } },
-                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(num, forType: .string) },
+                        ResultAction(name: "Call") {
+                            if !ContinuityDialer.dial(dialNum), let url = URL(string: "tel:\(dialNum)") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        },
+                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(num) },
                         ResultAction(name: "Message") { if let url = URL(string: "sms:\(dialNum)") { NSWorkspace.shared.open(url) } },
                     ]
                 ))
@@ -118,7 +187,7 @@ class ContactSearcher {
                     label: label, value: addr, icon: "envelope.fill",
                     actions: [
                         ResultAction(name: "Compose") { if let url = URL(string: "mailto:\(addr)") { NSWorkspace.shared.open(url) } },
-                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(addr, forType: .string) },
+                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(addr) },
                     ]
                 ))
             }
@@ -127,7 +196,7 @@ class ContactSearcher {
                 let text = parts.joined(separator: " at ")
                 details.append(DetailItem(
                     label: "Work", value: text, icon: "building.2.fill",
-                    actions: [ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }]
+                    actions: [ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(text) }]
                 ))
             }
             if let bday = contact.birthday, let date = Calendar.current.date(from: bday) {
@@ -135,7 +204,7 @@ class ContactSearcher {
                 let text = fmt.string(from: date)
                 details.append(DetailItem(
                     label: "Birthday", value: text, icon: "gift.fill",
-                    actions: [ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }]
+                    actions: [ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(text) }]
                 ))
             }
             for addr in contact.postalAddresses {
@@ -148,7 +217,7 @@ class ContactSearcher {
                     label: label, value: text, icon: "map.fill",
                     actions: [
                         ResultAction(name: "Open in Maps") { if let url = URL(string: "maps://?q=\(mapQuery)") { NSWorkspace.shared.open(url) } },
-                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) },
+                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(text) },
                     ]
                 ))
             }
@@ -158,7 +227,7 @@ class ContactSearcher {
                     label: "URL", value: text, icon: "link",
                     actions: [
                         ResultAction(name: "Open") { if let url = URL(string: text.hasPrefix("http") ? text : "https://\(text)") { NSWorkspace.shared.open(url) } },
-                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) },
+                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(text) },
                     ]
                 ))
             }

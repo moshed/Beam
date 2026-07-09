@@ -1,5 +1,8 @@
 import AppKit
 import SwiftUI
+import os.log
+
+private let beamLog = Logger(subsystem: "com.DNZ.beam", category: "keepopen")
 
 class BeamPanel: NSPanel {
     private var coordinator: SearchCoordinator
@@ -15,7 +18,9 @@ class BeamPanel: NSPanel {
 
         self.isFloatingPanel = true
         self.level = .floating
-        self.hidesOnDeactivate = true
+        // hidesOnDeactivate would auto-hide before our keep-open check runs; we
+        // dismiss manually via NSApplication's didResignActiveNotification.
+        self.hidesOnDeactivate = false
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
         self.animationBehavior = .utilityWindow
@@ -68,11 +73,40 @@ class BeamPanel: NSPanel {
 
     override func resignKey() {
         super.resignKey()
-        // Don't dismiss if settings window is active
         if let settingsWindow = AppDelegate.shared?.settingsWindow, settingsWindow.isVisible {
+            NSLog("[BEAM-KEEP] resignKey: settings window visible → not dismissing")
             return
         }
+        let keepOpen = SettingsManager.shared.keepOpenAppBundleIDs
+        let frontBID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<nil>"
+        let topBID = Self.topmostNonBeamBundleID() ?? "<nil>"
+        NSLog("[BEAM-KEEP] resignKey: frontmost=%@, topmost=%@, keepOpen=%@", frontBID, topBID, keepOpen)
+
+        if keepOpen.contains(frontBID) {
+            NSLog("[BEAM-KEEP] → frontmost matches, NOT dismissing")
+            return
+        }
+        if keepOpen.contains(topBID) {
+            NSLog("[BEAM-KEEP] → topmost matches, NOT dismissing")
+            return
+        }
+        NSLog("[BEAM-KEEP] → no match, dismissing")
         AppDelegate.shared?.dismissPanel()
+    }
+
+    static func topmostNonBeamBundleID() -> String? {
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let myPID = NSRunningApplication.current.processIdentifier
+        for w in list {
+            guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != myPID else { continue }
+            // Skip very-high window layers (Dock, menu bar, screensaver, etc.).
+            if let layer = w[kCGWindowLayer as String] as? Int, layer >= 25 { continue }
+            if let app = NSRunningApplication(processIdentifier: pid), let bid = app.bundleIdentifier {
+                return bid
+            }
+        }
+        return nil
     }
 
     func centerOnActiveScreen() {

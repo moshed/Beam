@@ -3,6 +3,17 @@ import SwiftUI
 import Contacts
 import Sparkle
 
+extension NSPasteboard {
+    /// Copy text and stamp Beam as the source, so Clipboard Manager attributes it correctly
+    /// even though Beam (a non-activating panel) dismisses before the manager's poll runs.
+    @discardableResult
+    func beamSet(_ string: String) -> Bool {
+        let result = setString(string, forType: .string)
+        setString("com.DNZ.beam", forType: NSPasteboard.PasteboardType("com.dnz.clipboard.source-app"))
+        return result
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: AppDelegate?
 
@@ -31,6 +42,51 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupHotkey()
         requestContactsAccess()
         setupUpdates()
+        setupAppActivationObserver()
+        setupAppDeactivationObserver()
+    }
+
+    /// Beam used to rely on NSPanel.hidesOnDeactivate to auto-hide, but that bypassed
+    /// our keep-open check. We now own the dismissal: when our app resigns active,
+    /// inspect the topmost / frontmost app and decide whether to dismiss.
+    private func setupAppDeactivationObserver() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self = self, self.panel?.isVisible == true else { return }
+            if let settingsWindow = self.settingsWindow, settingsWindow.isVisible { return }
+            let keepOpen = SettingsManager.shared.keepOpenAppBundleIDs
+            let frontBID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "<nil>"
+            let topBID = BeamPanel.topmostNonBeamBundleID() ?? "<nil>"
+            NSLog("[BEAM-KEEP] resignActive: frontmost=%@ topmost=%@ keepOpen=%@", frontBID, topBID, keepOpen)
+            if keepOpen.contains(frontBID) || keepOpen.contains(topBID) {
+                NSLog("[BEAM-KEEP] → match, keeping panel")
+                return
+            }
+            NSLog("[BEAM-KEEP] → no match, dismissing")
+            self.dismissPanel()
+        }
+    }
+
+    /// Watches for app activation system-wide. If the newly-active app isn't on the
+    /// user's keep-open list (and isn't Beam itself), dismiss the floating panel.
+    /// This handles the case where the user activates clipboard (kept open), then
+    /// activates Safari (should dismiss) — resignKey only fires once.
+    private func setupAppActivationObserver() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self = self, self.panel?.isVisible == true else { return }
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            let myBID = Bundle.main.bundleIdentifier
+            let bid = app.bundleIdentifier
+            if bid == myBID { return }
+            if let settingsWindow = self.settingsWindow, settingsWindow.isVisible { return }
+            if let b = bid, SettingsManager.shared.keepOpenAppBundleIDs.contains(b) { return }
+            self.dismissPanel()
+        }
     }
 
     private func setupUpdates() {
@@ -172,7 +228,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Copy text to clipboard, dismiss the panel, reactivate the previous app, and paste.
     func insertTextIntoPreviousApp(_ text: String) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        NSPasteboard.general.beamSet(text)
         let app = previousApp
         searchCoordinator.saveAndClear()
         panel?.orderOut(nil)

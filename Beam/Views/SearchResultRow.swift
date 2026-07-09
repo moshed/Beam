@@ -40,7 +40,8 @@ struct SearchResultRow: View {
                         }
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(result.subtitle.contains("\n") ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 

@@ -62,17 +62,18 @@ enum ResultDisplayMode: String, CaseIterable {
 /// Available actions per result type (names must match what searchers provide)
 struct CategoryActions {
     static let available: [SearchResultType: [String]] = [
-        .math: ["Copy result", "Copy query + result"],
+        .math: ["Copy result", "Copy query + result", "Use as input"],
         .contact: ["Open in Contacts", "Call", "Copy number"],
         .app: ["Open", "Reveal in Finder"],
         .file: ["Open", "Reveal in Finder", "Open With..."],
-        .calendar: ["Open in Calendar"],
+        .calendar: ["Create Event", "Pick Calendar", "Create & Open"],
         .reminder: ["Open in Reminders", "Mark complete", "Postpone due date"],
         .shortcut: ["Run", "Open in Shortcuts"],
         .definition: ["Copy definition", "Copy word"],
         .emoji: ["Insert", "Copy", "Copy name"],
         .unicode: ["Insert", "Copy", "Copy name"],
         .timezone: ["Copy time"],
+        .place: ["Open in Maps", "Copy address", "Use as event location"],
         .ai: ["Ask", "Copy answer"],
     ]
 }
@@ -114,9 +115,25 @@ class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(reminderDueDateOffsetMinutes, forKey: "reminderDueDateOffsetMinutes") }
     }
 
+    /// Bundle IDs of apps that should NOT cause Beam to dismiss when activated
+    /// (e.g. a clipboard manager you want to use alongside Beam).
+    @Published var keepOpenAppBundleIDs: [String] {
+        didSet {
+            if let data = try? JSONEncoder().encode(keepOpenAppBundleIDs) {
+                UserDefaults.standard.set(data, forKey: "keepOpenAppBundleIDs")
+            }
+        }
+    }
+
     /// Default Ollama model name. Empty string = auto-pick first available.
     @Published var ollamaModel: String {
         didSet { UserDefaults.standard.set(ollamaModel, forKey: "ollamaModel") }
+    }
+
+    /// Identifier of the EKCalendar the quick-add row saves to on Enter.
+    /// Empty string = fall back to EKEventStore.defaultCalendarForNewEvents.
+    @Published var defaultQuickAddCalendarID: String {
+        didSet { UserDefaults.standard.set(defaultQuickAddCalendarID, forKey: "defaultQuickAddCalendarID") }
     }
 
     /// Section ordering for grouped mode
@@ -130,7 +147,7 @@ class SettingsManager: ObservableObject {
 
     static let defaultSectionOrder: [String] = [
         "Math", "Time Zone", "Definition", "App", "Shortcut",
-        "Contact", "Calendar", "Reminder", "Emoji", "Unicode", "File", "Ask AI"
+        "Contact", "Calendar", "Reminder", "Place", "Emoji", "Unicode", "File", "Ask AI"
     ]
 
     func sectionIndex(for type: SearchResultType) -> Int {
@@ -173,7 +190,15 @@ class SettingsManager: ObservableObject {
         }
 
         self.reminderDueDateOffsetMinutes = UserDefaults.standard.object(forKey: "reminderDueDateOffsetMinutes") as? Int ?? 30
+
+        if let data = UserDefaults.standard.data(forKey: "keepOpenAppBundleIDs"),
+           let arr = try? JSONDecoder().decode([String].self, from: data) {
+            self.keepOpenAppBundleIDs = arr
+        } else {
+            self.keepOpenAppBundleIDs = []
+        }
         self.ollamaModel = UserDefaults.standard.string(forKey: "ollamaModel") ?? ""
+        self.defaultQuickAddCalendarID = UserDefaults.standard.string(forKey: "defaultQuickAddCalendarID") ?? ""
 
         if let data = UserDefaults.standard.data(forKey: "sectionOrder"),
            var decoded = try? JSONDecoder().decode([String].self, from: data) {

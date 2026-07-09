@@ -12,7 +12,16 @@ struct MathEvaluator {
     }()
 
     static func evaluate(_ input: String) -> (expression: String, result: String, isInfo: Bool)? {
-        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        // Strip stealth Unicode (BOM / zero-width / NBSP) that sneaks in via copy-paste —
+        // NSExpression throws "Unable to parse" on a trailing U+FEFF, which silently kills
+        // the entire math row.
+        let cleaned = input
+            .replacingOccurrences(of: "\u{FEFF}", with: "")  // BOM / ZW no-break space
+            .replacingOccurrences(of: "\u{200B}", with: "")  // zero-width space
+            .replacingOccurrences(of: "\u{2060}", with: "")  // word joiner
+            .replacingOccurrences(of: "\u{00A0}", with: " ") // non-breaking space
+            .replacingOccurrences(of: "\u{202F}", with: " ") // narrow no-break space
+        let trimmed = cleaned.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
 
         // Try currency-aware math first (e.g. "$6 $7 $8.9", "$1 + 1eur", "add $5 $10")
@@ -259,13 +268,13 @@ struct MathEvaluator {
         var label: String?
 
         switch keyword {
-        case "sum", "add", "total", "plus":
+        case "sum", "add", "total", "plus", "+":
             result = numbers.reduce(0, +)
             label = "Sum"
         case "average", "avg", "mean":
             result = numbers.reduce(0, +) / Double(numbers.count)
             label = "Average"
-        case "multiply", "product":
+        case "multiply", "product", "x", "*", "×":
             result = numbers.reduce(1, *)
             label = "Product"
         case "subtract", "minus", "difference":
@@ -609,9 +618,9 @@ struct MathEvaluator {
         // Try splitting number from attached unit: "100km", "5.5ft"
         if words.count == 1 {
             let word = trimmed
-            if let match = word.range(of: #"^([\d.,]+)\s*([a-zA-Z°]+.*)$"#, options: .regularExpression) {
+            if let match = word.range(of: #"^(-?[\d.,]+)\s*([a-zA-Z°"'′″]+.*)$"#, options: .regularExpression) {
                 let matched = String(word[match])
-                let regex = try! NSRegularExpression(pattern: #"^([\d.,]+)\s*([a-zA-Z°]+.*)$"#)
+                let regex = try! NSRegularExpression(pattern: #"^(-?[\d.,]+)\s*([a-zA-Z°"'′″]+.*)$"#)
                 let nsRange = NSRange(matched.startIndex..., in: matched)
                 if let r = regex.firstMatch(in: matched, range: nsRange),
                    let numRange = Range(r.range(at: 1), in: matched),
@@ -721,29 +730,19 @@ struct MathEvaluator {
             }
         }
 
-        // Must be a separator-delimited list of 2+ parts. Prefer x/× (allows bare
-        // operands that inherit the trailing unit). Fall back to "*" only when every
-        // part carries its own explicit length unit — so "3*4*5" stays multiplication
-        // but "32mm*45mm*67cm" is recognised as dimensions.
+        // Must be a separator-delimited list of 2+ parts. Prefer x/×; fall back to "*".
+        // For either separator, dimensions are only inferred when at least one part
+        // carries a length unit — so plain "3*4*5" still evaluates as multiplication.
         let normalizedBody = body.replacingOccurrences(of: "×", with: "x")
         var rawParts = normalizedBody.components(separatedBy: "x")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        var requireUnitOnEveryPart = false
         if rawParts.count < 2 && normalizedBody.contains("*") {
             rawParts = normalizedBody.components(separatedBy: "*")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
-            requireUnitOnEveryPart = true
         }
         guard rawParts.count >= 2 else { return nil }
-        if requireUnitOnEveryPart {
-            let allHaveLengthUnit = rawParts.allSatisfy { part in
-                guard let (_, unit) = splitExprAndUnit(part) else { return false }
-                return lengthUnitKeys.contains(normalizeUnit(unit))
-            }
-            guard allHaveLengthUnit else { return nil }
-        }
 
         var values: [Double] = []
         var units: [String?] = []
@@ -804,6 +803,19 @@ struct MathEvaluator {
         return (expression: input, result: "\(fmtNonZero(vol)) \(d.target)³")
     }
 
+    /// Volume in the SOURCE unit — raw product, no conversion (e.g.
+    /// "375 * 285 * 1,065mm" → "113,821,875 mm³"). Returns nil when the source
+    /// matches the target (the primary row already shows that).
+    static func dimensionsSourceVolume(_ input: String) -> (expression: String, result: String)? {
+        guard let d = parseDimensions(input), d.target != d.sourceUnit else { return nil }
+        var product: Double = 1
+        for (v, u) in zip(d.values, d.units) {
+            guard let inSource = convert(v, from: u, to: d.sourceUnit) else { return nil }
+            product *= inSource
+        }
+        return (expression: input, result: "\(fmtNonZero(product)) \(d.sourceUnit)³")
+    }
+
     /// Secondary row: convert each axis individually, e.g.
     /// "3mm x 4mm x 6mm to in" → "0.12 × 0.16 × 0.24 in".
     static func secondaryResult(_ input: String) -> (expression: String, result: String)? {
@@ -861,9 +873,17 @@ struct MathEvaluator {
         let fromNorm = normalizeUnit(fromUnit)
         let toNorm = normalizeUnit(target)
 
-        // Series: comma-separated or space-separated bare numbers → convert each
+        // Series: comma-separated or space-separated bare numbers → convert each.
+        // BUT first rule out a thousands-formatted single number like "6,945.84" —
+        // those commas are grouping, not series separators.
+        let exprNoSpace = exprStr.trimmingCharacters(in: .whitespaces)
+        let looksLikeThousandsNumber = exprNoSpace.range(
+            of: #"^\d{1,3}(,\d{3})+(\.\d+)?$"#,
+            options: .regularExpression
+        ) != nil
+
         let seriesParts: [String]
-        if exprStr.contains(",") && !exprStr.contains("(") {
+        if !looksLikeThousandsNumber && exprStr.contains(",") && !exprStr.contains("(") {
             seriesParts = exprStr.components(separatedBy: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
@@ -887,8 +907,17 @@ struct MathEvaluator {
             return (expression: input, result: "\(results.joined(separator: ", ")) \(target)")
         }
 
-        // Evaluate expression as math, then convert
-        guard let value = evalMathToDouble(exprStr) else { return nil }
+        // Evaluate expression as math, then convert. If no number was given
+        // ("mm3 to m3", "mm to m"), default to 1 so the ratio is shown.
+        let trimmedExpr = exprStr.trimmingCharacters(in: .whitespaces)
+        let value: Double
+        if trimmedExpr.isEmpty {
+            value = 1
+        } else if let v = evalMathToDouble(trimmedExpr) {
+            value = v
+        } else {
+            return nil
+        }
 
         if let converted = convert(value, from: fromNorm, to: toNorm) {
             return (expression: input, result: "\(format(converted)) \(target)")
@@ -1191,10 +1220,11 @@ struct MathEvaluator {
     // MARK: - Auto Currency Conversion (standalone amounts to USD)
 
     private static func evaluateAutoCurrencyConvert(_ input: String) -> (expression: String, result: String)? {
-        let lower = input.lowercased().trimmingCharacters(in: .whitespaces)
+        // Expand "30k rmb" → "30000 rmb" so number+abbreviation+currency works.
+        let lower = expandAbbreviations(input.lowercased().trimmingCharacters(in: .whitespaces))
 
         // Pattern: "<number><currency>" or "<number> <currency>" or "<symbol><number>"
-        // e.g. "1rmb", "100 eur", "100eur", "€50", "£30"
+        // e.g. "1rmb", "100 eur", "100eur", "€50", "£30", "30k rmb"
         let patterns: [(regex: String, numGroup: Int, curGroup: Int)] = [
             (#"^([\d,.]+)\s*([a-z]{2,})\s*$"#, 1, 2),             // "100eur" or "100 eur"
             (#"^([\$€£¥₪])\s*([\d,.]+)\s*$"#, 2, 1),              // "$100", "€50"
@@ -1253,7 +1283,7 @@ struct MathEvaluator {
         guard !lower.contains(" to "), !lower.contains(" in "), !lower.contains(" as ") else { return nil }
 
         // Pattern: "<number><unit>" or "<number> <unit>" (space optional)
-        let regex = try! NSRegularExpression(pattern: #"^([\d,.]+)\s*([a-z/°]+.*)$"#)
+        let regex = try! NSRegularExpression(pattern: #"^(-?[\d,.]+)\s*([a-z/°]+.*)$"#)
         let nsRange = NSRange(lower.startIndex..., in: lower)
         guard let match = regex.firstMatch(in: lower, range: nsRange) else { return nil }
 
@@ -1407,7 +1437,16 @@ struct MathEvaluator {
         )
         expr = expr.replacingOccurrences(of: "^", with: "**")
 
-        // Convert a trailing "N%" into "(N*0.01)" so "925x12%" -> 925*0.12 = 111.
+        // Calculator-style percentage: "X + Y%" → "X * (1 + Y/100)" and "X - Y%" → "X * (1 - Y/100)".
+        // Matches most physical / iOS calculators (10 + 8.75% = 10.875, 100 - 20% = 80).
+        // Must run before the generic "N%" → "(N*0.01)" rule below so "+ 8.75%" isn't rewritten as "+ 0.0875".
+        expr = expr.replacingOccurrences(
+            of: #"(?<=[\d)])\s*([+\-])\s*(\d+\.?\d*)\s*%(?!\s*[\d.(])"#,
+            with: "*(1$1$2/100)",
+            options: .regularExpression
+        )
+
+        // Trailing "N%" (multiply/divide context) → "(N*0.01)" so "925x12%" -> 925*0.12 = 111.
         // Only when % is NOT immediately followed by a digit or "(" (that's modulo, e.g. "10%3").
         expr = expr.replacingOccurrences(
             of: #"([\d.]+)\s*%(?!\s*[\d.(])"#,
@@ -1625,18 +1664,31 @@ struct MathEvaluator {
     /// whole — but a spaced "DC - 124" keeps the "-" as subtraction.
     private static func labelRanges(in expr: String) -> [NSRange] {
         let abbrevPattern = #"^[\d.,]+(k|million|milion|mil|m|billion|bil|b|trillion|tril|t)$"#
-        guard let tokenRegex = try? NSRegularExpression(pattern: #"[a-zA-Z0-9]*[a-zA-Z][a-zA-Z0-9]*"#),
-              let contRegex = try? NSRegularExpression(pattern: #"^-[a-zA-Z0-9]+"#) else { return [] }
+        // Token regex now allows commas inside the run so "1,065MM" is one token
+        // (otherwise the comma split it into "1" + "065MM" and "065MM" looked label-ish).
+        guard let tokenRegex = try? NSRegularExpression(pattern: #"[a-zA-Z0-9,]*[a-zA-Z][a-zA-Z0-9,]*"#),
+              let contRegex = try? NSRegularExpression(pattern: #"^-[a-zA-Z0-9]+"#),
+              let numUnitRegex = try? NSRegularExpression(pattern: #"^[\d.,]+([a-zA-Z]+)$"#) else { return [] }
         let ns = expr as NSString
         var ranges: [NSRange] = []
         var consumedUpTo = 0
         for m in tokenRegex.matches(in: expr, range: NSRange(location: 0, length: ns.length)) {
             if m.range.location < consumedUpTo { continue }
-            let token = ns.substring(with: m.range)
+            let token = ns.substring(with: m.range).trimmingCharacters(in: CharacterSet(charactersIn: ","))
+            guard !token.isEmpty else { continue }
             let lower = token.lowercased()
             let lettersOnlyX = token.filter { $0.isLetter }.allSatisfy { $0 == "x" }
             let isAbbrev = lower.range(of: abbrevPattern, options: .regularExpression) != nil
-            guard !mathFunctionNames.contains(lower), !isAbbrev, !lettersOnlyX else { continue }
+
+            // Number attached to a known unit (e.g. "1,065MM", "50ft") — not a label.
+            var isNumberWithUnit = false
+            let tokenNS = token as NSString
+            if let unitMatch = numUnitRegex.firstMatch(in: token, range: NSRange(location: 0, length: tokenNS.length)) {
+                let unit = tokenNS.substring(with: unitMatch.range(at: 1))
+                if isKnownUnit(unit) { isNumberWithUnit = true }
+            }
+
+            guard !mathFunctionNames.contains(lower), !isAbbrev, !lettersOnlyX, !isNumberWithUnit else { continue }
             // Extend across hyphen-joined model-number continuations.
             var end = m.range.location + m.range.length
             while end < ns.length,

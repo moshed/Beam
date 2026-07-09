@@ -6,6 +6,17 @@
     <description>Beam release feed</description>
     <language>en</language>
     <item>
+      <title>Version 1.0.6</title>
+      <pubDate>Thu, 09 Jul 2026 15:01:25 +0000</pubDate>
+      <sparkle:version>7</sparkle:version>
+      <sparkle:shortVersionString>1.0.6</sparkle:shortVersionString>
+      <description><![CDATA[Call button now opens the real 'Call using iPhone?' popup via Safari trampoline. Calendar quick-add: type an event like 'lunch with sara tomorrow 1pm at grand central' or 'Global Entry interview JFK Airport 8:30 Fri' — Beam parses title, time, and full multi-part location. Shift+Enter shows a calendar picker; default calendar configurable in Settings > General > Calendar. New Places section (Apple Maps, US-biased): type an address or venue and Beam returns titled results. Time-zone converter: '12:30pm ny to utah' — supports cities, US states, and TZ identifiers. Contacts with only an organization name (e.g. Fesco) now appear in search. Settings hierarchy cleaned up.]]></description>
+      <enclosure
+        url="https://github.com/moshed/Beam/releases/download/v1.0.6/Beam.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="/iQHT9lmp0dXGFptRPJWBWIvIgI++uQgW4J3EKuzC/HroZVB+c4xAYe101zqSWTbGNDTAG8mAfVP/dkVGinjBQ==" length="2015842"/>
+    </item>
+    <item>
       <title>Version 1.0.5</title>
       <pubDate>Fri, 29 May 2026 15:02:18 +0000</pubDate>
       <sparkle:version>6</sparkle:version>

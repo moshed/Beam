@@ -6,6 +6,17 @@
     <description>Beam release feed</description>
     <language>en</language>
     <item>
+      <title>Version 1.0.7</title>
+      <pubDate>Mon, 27 Jul 2026 22:53:59 +0000</pubDate>
+      <sparkle:version>8</sparkle:version>
+      <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+      <description><![CDATA[Historical currency: '1 usd to cny on 5/21/25' or '… on september 2025' pulls the rate from Frankfurter (free ECB history, no key). Auto-refreshes when it arrives — no need to retype. Better date arithmetic: '10/1 + 30 + 25' now advances 55 days from Oct 1. Bare 'm' means metres (SI); type 'mil' or a currency ($5.5m) for million. Currency-math fixed: '$450k - 100k - 10815' computes right. Phone detection tightened (10+ digits, valid NANP/international format) so '7536-4512' stays math. New auto-conversions: 58" → cm, 6' → m, 70 f → C, 5 lb → kg. Contact rows: 'All options…' pops a native menu with Call / Message / FaceTime Video / FaceTime Audio / Copy per phone and email. Dialer now uses Contacts.app (silent immediate Continuity call — no popup). Emoji/unicode grid: press Down to focus (blue) and use L/R/Up/Down to navigate; otherwise arrows drive the search-field cursor.]]></description>
+      <enclosure
+        url="https://github.com/moshed/Beam/releases/download/v1.0.7/Beam.zip"
+        type="application/octet-stream"
+        sparkle:edSignature="xfrFfSBMTQymY3yZXtNEpNrysF59CnTMG17IMIqL7llRdeRTUPokluVdNrX4R5PHflgvCTLgzSFus25bs1gHAw==" length="2043335"/>
+    </item>
+    <item>
       <title>Version 1.0.6</title>
       <pubDate>Thu, 09 Jul 2026 15:01:25 +0000</pubDate>
       <sparkle:version>7</sparkle:version>

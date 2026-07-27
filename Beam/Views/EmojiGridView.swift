@@ -50,15 +50,23 @@ struct EmojiCell: View {
     let emoji: String
     let name: String
     let isSelected: Bool
+    /// When true, the user has explicitly Down-ed into the grid and Left/Right
+    /// navigates cells. We paint the selection blue in that mode; when the
+    /// grid is idle (arrows still driving the text cursor) we paint a subtle
+    /// grey so the selected cell is still visible but obviously not active.
+    var gridFocused: Bool = false
+
+    private var fillColor: Color {
+        guard isSelected else { return .clear }
+        return gridFocused ? Color.accentColor.opacity(0.35)
+                           : Color.secondary.opacity(0.20)
+    }
 
     var body: some View {
         Text(emoji)
             .font(.system(size: 28))
             .frame(width: 52, height: 52)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.accentColor.opacity(0.3) : Color.clear)
-            )
+            .background(RoundedRectangle(cornerRadius: 8).fill(fillColor))
             .help(name)
     }
 }

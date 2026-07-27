@@ -111,6 +111,7 @@ struct BeamContentView: View {
                     GroupedResultsListView(
                         results: coordinator.results,
                         selectedIndex: coordinator.selectedIndex,
+                        gridFocused: coordinator.gridFocused,
                         expandedResultId: coordinator.expandedResultId,
                         expandedDetailIndex: coordinator.expandedDetailIndex,
                         onSelect: { index in
@@ -125,6 +126,7 @@ struct BeamContentView: View {
                     ResultsListView(
                         results: coordinator.results,
                         selectedIndex: coordinator.selectedIndex,
+                        gridFocused: coordinator.gridFocused,
                         expandedResultId: coordinator.expandedResultId,
                         expandedDetailIndex: coordinator.expandedDetailIndex,
                         onSelect: { index in

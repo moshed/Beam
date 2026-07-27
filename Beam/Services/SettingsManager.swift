@@ -63,7 +63,7 @@ enum ResultDisplayMode: String, CaseIterable {
 struct CategoryActions {
     static let available: [SearchResultType: [String]] = [
         .math: ["Copy result", "Copy query + result", "Use as input"],
-        .contact: ["Open in Contacts", "Call", "Copy number"],
+        .contact: ["All options…", "Open in Contacts", "Call", "Copy number"],
         .app: ["Open", "Reveal in Finder"],
         .file: ["Open", "Reveal in Finder", "Open With..."],
         .calendar: ["Create Event", "Pick Calendar", "Create & Open"],

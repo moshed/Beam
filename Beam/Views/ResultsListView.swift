@@ -3,6 +3,7 @@ import SwiftUI
 struct ResultsListView: View {
     let results: [SearchResult]
     let selectedIndex: Int
+    var gridFocused: Bool = false
     var expandedResultId: UUID? = nil
     var expandedDetailIndex: Int? = nil
     var onSelect: (Int) -> Void
@@ -21,6 +22,7 @@ struct ResultsListView: View {
                                 results: results,
                                 indices: segment.indices,
                                 selectedIndex: selectedIndex,
+                                gridFocused: gridFocused,
                                 onSelect: onSelect
                             )
                         } else {
@@ -54,6 +56,7 @@ struct ResultsListView: View {
 struct GroupedResultsListView: View {
     let results: [SearchResult]
     let selectedIndex: Int
+    var gridFocused: Bool = false
     var expandedResultId: UUID? = nil
     var expandedDetailIndex: Int? = nil
     var onSelect: (Int) -> Void
@@ -90,6 +93,7 @@ struct GroupedResultsListView: View {
                                 results: results,
                                 indices: section.items.map { $0.index },
                                 selectedIndex: selectedIndex,
+                                gridFocused: gridFocused,
                                 onSelect: onSelect
                             )
                         } else {
@@ -125,6 +129,7 @@ struct InlineEmojiGrid: View {
     let results: [SearchResult]
     let indices: [Int]
     let selectedIndex: Int
+    var gridFocused: Bool = false
     var onSelect: (Int) -> Void
 
     private let columns = SearchCoordinator.emojiGridColumns
@@ -136,7 +141,8 @@ struct InlineEmojiGrid: View {
                 EmojiCell(
                     emoji: emojiChar(from: result),
                     name: emojiName(from: result),
-                    isSelected: index == selectedIndex
+                    isSelected: index == selectedIndex,
+                    gridFocused: gridFocused
                 )
                 .id(result.id)
                 .onTapGesture { onSelect(index) }

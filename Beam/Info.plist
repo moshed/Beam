@@ -30,6 +30,8 @@
 	<string>Beam searches your contacts to help you find people quickly.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Beam searches your reminders to help you find tasks quickly.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Beam asks Contacts to place calls through your iPhone (Continuity Calling).</string>
 	<key>SUFeedURL</key>
 	<string>https://moshed.github.io/Beam/appcast.xml</string>
 	<key>SUPublicEDKey</key>

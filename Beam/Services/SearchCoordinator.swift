@@ -17,6 +17,11 @@ class SearchCoordinator {
     /// (Excel-style: highlight a portion, see just that piece compute).
     var selectionMath: (text: String, result: String)?
     var selectedIndex: Int = 0
+    /// True when the user has explicitly pressed Down into an emoji/unicode
+    /// grid. While false, Left/Right pass through to the text field so the
+    /// insertion point can move around normally. Query edits, Escape, and
+    /// Up-at-top-of-grid all reset this.
+    var gridFocused: Bool = false
     var displayMode: ResultDisplayMode = SettingsManager.shared.resultDisplayMode
     var previousQuery: String = ""
 
@@ -129,6 +134,19 @@ class SearchCoordinator {
 
     init() {
         MathEvaluator.fetchRates()
+        // Re-run the current query when live or historical FX rates arrive —
+        // this replaces "Loading rates…" with the real number without the user
+        // needing to touch the search bar.
+        NotificationCenter.default.addObserver(
+            forName: .beamRatesUpdated, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self = self, !self.query.isEmpty else { return }
+            let eval = MathEvaluator.evaluate(self.query)
+            self.mathResultInfo = eval.map {
+                MathResultInfo(expression: $0.expression, result: $0.result, isInfo: $0.isInfo)
+            }
+            self.performSearch(self.query)
+        }
     }
 
     /// Called when the search-bar selection changes — evaluates the selected substring
@@ -149,6 +167,7 @@ class SearchCoordinator {
     /// Called from SearchBarView when text changes
     func queryChanged(_ newQuery: String) {
         query = newQuery
+        gridFocused = false
         if isHistoryMode && !newQuery.isEmpty {
             exitHistoryMode()
             query = newQuery
@@ -281,7 +300,10 @@ class SearchCoordinator {
                 if pos >= cols {
                     selectedIndex = indices[pos - cols]
                 } else {
-                    // At top row of grid — move to result before the emoji block
+                    // At top row of grid — release grid focus so Left/Right
+                    // returns to the search field, and hop to the result
+                    // above the grid block if there is one.
+                    gridFocused = false
                     let firstEmoji = indices[0]
                     if firstEmoji > 0 { selectedIndex = firstEmoji - 1 }
                 }
@@ -748,10 +770,26 @@ class SearchCoordinator {
         // Reject anything with letters — a phone number has none.
         guard trimmed.range(of: "[A-Za-z]", options: .regularExpression) == nil else { return nil }
         let digits = trimmed.filter { $0.isNumber }
-        guard (7...15).contains(digits.count) else { return nil }
+        // 10 = shortest a real US number ever is (area code + 7). Anything
+        // shorter is almost always subtraction like "7536-4512" and should
+        // fall through to the math evaluator.
+        guard (10...15).contains(digits.count) else { return nil }
         // Every char must be a digit or standard phone punctuation.
         let allowed = CharacterSet(charactersIn: "+-()., ").union(.decimalDigits)
         guard trimmed.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+
+        // If separators appear, they must land in phone-valid positions —
+        // otherwise `12345-67890` (10 digits but dash mid-group) would look
+        // like a phone. NANP: `(NNN) NNN-NNNN`, `NNN-NNN-NNNN`, bare 10, or
+        // any of the above with a `+CC` international prefix.
+        let hasSeparator = trimmed.contains(where: { "-.() ".contains($0) })
+        if hasSeparator {
+            let nanp = #"^\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}$"#
+            let intl = #"^\+\d{1,3}[-. ]?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}$"#
+            let matchesNANP = trimmed.range(of: nanp, options: .regularExpression) != nil
+            let matchesIntl = trimmed.range(of: intl, options: .regularExpression) != nil
+            guard matchesNANP || matchesIntl else { return nil }
+        }
 
         // Normalise to E.164 — FaceTime only triggers the Continuity cellular call
         // when it receives a properly-formatted international number.

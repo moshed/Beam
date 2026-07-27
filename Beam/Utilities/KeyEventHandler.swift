@@ -26,6 +26,7 @@ class KeyCaptureView: NSView {
     weak var panel: BeamPanel?
     private var localMonitor: Any?
 
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {
@@ -113,22 +114,35 @@ class KeyCaptureView: NSView {
 
         switch Int(keyCode) {
         case kVK_LeftArrow:
-            if coordinator.isSelectedEmoji {
+            // Only intercept when the user has explicitly Down-ed into a
+            // grid section. Otherwise pass through so the text-field cursor
+            // moves normally (Cmd/Option+Left keep their line/word jumps too).
+            if coordinator.gridFocused, coordinator.isSelectedEmoji, mods == 0 {
                 coordinator.moveLeft()
                 return true
             }
             return false
         case kVK_RightArrow:
-            if coordinator.isSelectedEmoji {
+            if coordinator.gridFocused, coordinator.isSelectedEmoji, mods == 0 {
                 coordinator.moveRight()
                 return true
             }
             return false
         case kVK_DownArrow:
+            // If we're already parked on a grid cell but haven't focused it
+            // yet, the first Down just lights up the current cell (blue) —
+            // no navigation. This makes entering the grid feel like a
+            // deliberate "activate" step rather than an accidental jump.
+            if coordinator.isSelectedEmoji, !coordinator.gridFocused {
+                coordinator.gridFocused = true
+                return true
+            }
             coordinator.moveDown()
+            if coordinator.isSelectedEmoji { coordinator.gridFocused = true }
             return true
         case kVK_UpArrow:
             coordinator.moveUp()
+            if !coordinator.isSelectedEmoji { coordinator.gridFocused = false }
             return true
         case kVK_Return:
             if !coordinator.results.isEmpty {

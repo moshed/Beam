@@ -1,6 +1,13 @@
 import Contacts
 import AppKit
 
+/// Retains a closure so an NSMenuItem can invoke it via ObjC selector.
+private final class MenuActionTarget: NSObject {
+    let block: () -> Void
+    init(block: @escaping () -> Void) { self.block = block }
+    @objc func fire(_ sender: Any?) { block() }
+}
+
 class ContactSearcher {
     private let store = CNContactStore()
     private(set) var isAuthorized = false
@@ -65,8 +72,111 @@ class ContactSearcher {
         }
     }
 
+    /// Pop up a native NSMenu at the mouse cursor listing every possible
+    /// action for this contact — call/message/FaceTime each phone, compose/
+    /// FaceTime each email, plus Open in Contacts. Lets the user pick any
+    /// target instead of being locked to whichever action is bound to the
+    /// keyboard shortcut.
+    private static func showContactMenu(
+        name: String,
+        phones: [CNLabeledValue<CNPhoneNumber>],
+        emails: [CNLabeledValue<NSString>],
+        identifier: String
+    ) {
+        let menu = NSMenu(title: name)
+        menu.autoenablesItems = false
+
+        // Header
+        let header = NSMenuItem(title: name.isEmpty ? "Contact" : name, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(.separator())
+
+        // Per-phone actions
+        for pn in phones {
+            let label = CNLabeledValue<NSString>.localizedString(forLabel: pn.label ?? "")
+            let num = pn.value.stringValue
+            let dialNum = e164(num)
+            let sub = NSMenu(title: "\(label): \(num)")
+            sub.addItem(action("Call", "phone.fill") {
+                if !ContinuityDialer.dial(dialNum), let url = URL(string: "tel:\(dialNum)") {
+                    NSWorkspace.shared.open(url)
+                }
+            })
+            sub.addItem(action("Message", "message.fill") {
+                if let url = URL(string: "sms:\(dialNum)") { NSWorkspace.shared.open(url) }
+            })
+            sub.addItem(action("FaceTime Video", "video.fill") {
+                if let url = URL(string: "facetime:\(dialNum)") { NSWorkspace.shared.open(url) }
+            })
+            sub.addItem(action("FaceTime Audio", "phone.badge.waveform.fill") {
+                if let url = URL(string: "facetime-audio:\(dialNum)") { NSWorkspace.shared.open(url) }
+            })
+            sub.addItem(action("Copy", "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.beamSet(num)
+            })
+            let parent = NSMenuItem(title: "\(num) — \(label)", action: nil, keyEquivalent: "")
+            parent.image = NSImage(systemSymbolName: "phone.fill", accessibilityDescription: nil)
+            parent.submenu = sub
+            menu.addItem(parent)
+        }
+
+        if !phones.isEmpty, !emails.isEmpty { menu.addItem(.separator()) }
+
+        // Per-email actions
+        for em in emails {
+            let label = CNLabeledValue<NSString>.localizedString(forLabel: em.label ?? "")
+            let addr = em.value as String
+            let sub = NSMenu(title: "\(label): \(addr)")
+            sub.addItem(action("Compose email", "envelope.fill") {
+                if let url = URL(string: "mailto:\(addr)") { NSWorkspace.shared.open(url) }
+            })
+            sub.addItem(action("iMessage", "message.fill") {
+                if let url = URL(string: "sms:\(addr)") { NSWorkspace.shared.open(url) }
+            })
+            sub.addItem(action("FaceTime Video", "video.fill") {
+                if let url = URL(string: "facetime:\(addr)") { NSWorkspace.shared.open(url) }
+            })
+            sub.addItem(action("FaceTime Audio", "phone.badge.waveform.fill") {
+                if let url = URL(string: "facetime-audio:\(addr)") { NSWorkspace.shared.open(url) }
+            })
+            sub.addItem(action("Copy", "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.beamSet(addr)
+            })
+            let parent = NSMenuItem(title: "\(addr) — \(label)", action: nil, keyEquivalent: "")
+            parent.image = NSImage(systemSymbolName: "envelope.fill", accessibilityDescription: nil)
+            parent.submenu = sub
+            menu.addItem(parent)
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(action("Open in Contacts", "person.crop.circle") {
+            if let url = URL(string: "addressbook://\(identifier)") {
+                NSWorkspace.shared.open(url)
+            }
+        })
+
+        // Pop up at the mouse. `nil` view + no positioning item means the
+        // menu appears at the current mouse location — user can immediately
+        // click any submenu without hunting.
+        NSMenu.popUpContextMenu(menu, with: NSApp.currentEvent ?? NSEvent(), for: NSApp.keyWindow?.contentView ?? NSView())
+    }
+
+    /// Convenience — build an NSMenuItem wired to a closure via a small
+    /// ObjC shim target.
+    private static func action(_ title: String, _ symbol: String, _ block: @escaping () -> Void) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(MenuActionTarget.fire(_:)), keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        let target = MenuActionTarget(block: block)
+        item.target = target
+        item.representedObject = target  // retain
+        return item
+    }
+
     /// Normalise a phone-number string to E.164 (+1XXXXXXXXXX for bare US 10-digit).
-    private static func e164(_ raw: String) -> String {
+    static func e164(_ raw: String) -> String {
         let digits = raw.filter(\.isNumber)
         if raw.trimmingCharacters(in: .whitespaces).hasPrefix("+") {
             return "+\(digits)"
@@ -142,7 +252,15 @@ class ContactSearcher {
             icon?.size = NSSize(width: 32, height: 32)
 
             let identifier = contact.identifier
+            let phones = contact.phoneNumbers
+            let emails = contact.emailAddresses
             var actions: [ResultAction] = []
+            // Enter → menu of everything callable/messageable for this contact,
+            // so we're not locked to a single default. Rest of the slots are
+            // still the common shortcuts.
+            actions.append(ResultAction(name: "All options…") {
+                Self.showContactMenu(name: name, phones: phones, emails: emails, identifier: identifier)
+            })
             actions.append(ResultAction(name: "Open in Contacts") {
                 if let url = URL(string: "addressbook://\(identifier)") {
                     NSWorkspace.shared.open(url)
@@ -175,8 +293,10 @@ class ContactSearcher {
                                 NSWorkspace.shared.open(url)
                             }
                         },
-                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(num) },
                         ResultAction(name: "Message") { if let url = URL(string: "sms:\(dialNum)") { NSWorkspace.shared.open(url) } },
+                        ResultAction(name: "FaceTime Video") { if let url = URL(string: "facetime:\(dialNum)") { NSWorkspace.shared.open(url) } },
+                        ResultAction(name: "FaceTime Audio") { if let url = URL(string: "facetime-audio:\(dialNum)") { NSWorkspace.shared.open(url) } },
+                        ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(num) },
                     ]
                 ))
             }
@@ -187,6 +307,9 @@ class ContactSearcher {
                     label: label, value: addr, icon: "envelope.fill",
                     actions: [
                         ResultAction(name: "Compose") { if let url = URL(string: "mailto:\(addr)") { NSWorkspace.shared.open(url) } },
+                        ResultAction(name: "iMessage") { if let url = URL(string: "sms:\(addr)") { NSWorkspace.shared.open(url) } },
+                        ResultAction(name: "FaceTime Video") { if let url = URL(string: "facetime:\(addr)") { NSWorkspace.shared.open(url) } },
+                        ResultAction(name: "FaceTime Audio") { if let url = URL(string: "facetime-audio:\(addr)") { NSWorkspace.shared.open(url) } },
                         ResultAction(name: "Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.beamSet(addr) },
                     ]
                 ))

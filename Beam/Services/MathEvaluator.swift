@@ -45,13 +45,18 @@ struct MathEvaluator {
         // Auto-convert standalone currency to USD (e.g. "1 rmb" -> "$0.14")
         if let r = evaluateAutoCurrencyConvert(trimmed) { return (r.expression, r.result, false) }
 
-        // Auto-convert standalone units to US standard
+        // Auto-convert standalone units to US standard.
+        // Bare "2.5m" reads as 2.5 metres here (m is the SI symbol).
+        // For million, type "2.5mil" or "2.5 million", or include a currency
+        // symbol — evaluateAbbreviation below and evaluateCurrencyMath above
+        // treat single "m" as million only in that context.
         if let r = evaluateAutoUnitConvert(trimmed) { return (r.expression, r.result, false) }
 
         // UPC/GTIN check digit (e.g. 11-digit -> UPC-A, 13-digit -> GTIN-14)
         if let r = evaluateCheckDigit(trimmed) { return (r.expression, r.result, true) }
 
-        // Try standalone number abbreviation (e.g. "5k" -> "5,000", "2.5 million" -> "2,500,000")
+        // Try standalone number abbreviation (e.g. "5k" -> "5,000", "2.5mil" -> "2,500,000").
+        // Bare single "m" isn't accepted here — that's metres above.
         if let r = evaluateAbbreviation(trimmed) { return (r.expression, r.result, false) }
 
         // Equation solving (e.g. "21^2*x^2=16.25^2")
@@ -92,7 +97,12 @@ struct MathEvaluator {
     /// If even ONE token has a currency, bare numbers inherit that currency.
     private static func evaluateCurrencyMath(_ input: String) -> (expression: String, result: String)? {
         // Drop "~" (approximately) so it doesn't hide an "x"-multiplication (e.g. "18 x ~$5").
-        let trimmed = input.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "~", with: "")
+        // Expand k/m/b abbreviations up front — otherwise the currency tokenizer reads
+        // just the digits of "100k" and silently drops the "k", turning "$450 - 100k"
+        // into "$450 - 100".
+        let trimmed = expandAbbreviations(
+            input.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "~", with: "")
+        )
 
         // If the expression has parentheses, multiplication, division, or power — it's a math expression, not a currency sum.
         // "x"/"×" followed by a number or currency (e.g. "18 x $5", "18 x $.70") is multiplication too.
@@ -101,6 +111,10 @@ struct MathEvaluator {
            trimmed.range(of: #"[xX×]\s*[\d$€£¥₪.]"#, options: .regularExpression) != nil {
             return nil
         }
+        // Explicit "X to/in Y" conversions (with optional "on <date>" tail) are
+        // evaluateCurrency's / evaluateCurrencyConvert's job — don't sum here.
+        let lc = trimmed.lowercased()
+        if lc.range(of: #"\s(to|in)\s"#, options: .regularExpression) != nil { return nil }
 
         // Check if input contains currency symbols BEFORE numbers (not after, e.g. "10$" is not currency)
         let symbolBeforeNum = #"[\$€£¥₪]\s*\d"#
@@ -324,10 +338,12 @@ struct MathEvaluator {
         let lower = input.lowercased().trimmingCharacters(in: .whitespaces)
 
         // "<date> + X unit [+/- Y unit ...]" — chained date arithmetic
-        // e.g. "9/1 + 85 days", "today + 10 years + 364 days", "sep 1 + 1 month - 5 days"
+        // e.g. "9/1 + 85 days", "today + 10 years + 364 days", "sep 1 + 1 month - 5 days".
+        // Bare "+ N" with no unit is treated as N days once we know the base
+        // parses as a date, so "10/1 + 30 + 25" advances 55 days from Oct 1.
         // Single op with no date prefix (e.g. "+ 85 days") falls through to the relative-to-today block below.
         let trimmedInput = input.trimmingCharacters(in: .whitespaces)
-        let opPattern = #"([+\-])\s*(\d+\.?\d*)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|yrs?)"#
+        let opPattern = #"([+\-])\s*(\d+\.?\d*)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|yrs?)?"#
         if let regex = try? NSRegularExpression(pattern: opPattern, options: [.caseInsensitive]) {
             let nsInput = trimmedInput as NSString
             let opMatches = regex.matches(in: trimmedInput, range: NSRange(location: 0, length: nsInput.length))
@@ -341,8 +357,36 @@ struct MathEvaluator {
                     if !between.trimmingCharacters(in: .whitespaces).isEmpty { contiguous = false }
                 }
                 let baseStr = nsInput.substring(to: opMatches[0].range.location).trimmingCharacters(in: .whitespaces)
-                if contiguous && (opMatches.count > 1 || !baseStr.isEmpty) {
-                    let baseDate: Date? = baseStr.isEmpty ? Date() : parseDate(baseStr)
+                // Require a real date base — otherwise "2 + 3" would light up
+                // as "today + 3 days".
+                let baseDate: Date? = baseStr.isEmpty ? nil : parseDate(baseStr)
+                // Deciding whether bare "+ N" (no unit word) counts as days:
+                //   * Strong base (word like today/tomorrow, month name, or full
+                //     `M/D/YYYY`) always allows bare — `today - 7` is clearly a
+                //     date subtract.
+                //   * Weak numeric base (`M/D` only) needs a stronger signal:
+                //     multi-op, an explicit unit somewhere, OR a bare value > 10.
+                //     This keeps `6/2 + 1` as math (=4) while `9/1 + 85` and
+                //     `10/1 + 30 + 25` still light up as date arithmetic.
+                let baseLower = baseStr.lowercased()
+                let monthWords = ["today","tomorrow","yesterday","now",
+                                  "jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec",
+                                  "january","february","march","april","june","july","august","september","october","november","december"]
+                let hasStrongDateSignal = monthWords.contains(where: { baseLower.contains($0) })
+                    || baseStr.range(of: #"\d+/\d+/\d"#, options: .regularExpression) != nil
+                let explicitUnitCount = opMatches.reduce(0) { $0 + ($1.range(at: 3).location == NSNotFound ? 0 : 1) }
+                var largeBareValue = false
+                if !hasStrongDateSignal, explicitUnitCount == 0, opMatches.count == 1 {
+                    let m = opMatches[0]
+                    let matched = nsInput.substring(with: m.range).trimmingCharacters(in: .whitespaces)
+                    let afterSign = String(matched.dropFirst()).trimmingCharacters(in: .whitespaces)
+                    if let n = Double(afterSign), abs(n) > 10 { largeBareValue = true }
+                }
+                let allowBareDefault = hasStrongDateSignal
+                    || opMatches.count >= 2
+                    || explicitUnitCount > 0
+                    || largeBareValue
+                if contiguous && !baseStr.isEmpty && baseDate != nil && allowBareDefault {
                     if let baseDate {
                         var current = baseDate
                         var showTime = false
@@ -353,8 +397,9 @@ struct MathEvaluator {
                             let isNeg = matched.hasPrefix("-")
                             let afterSign = String(matched.dropFirst()).trimmingCharacters(in: .whitespaces)
                             let parts = afterSign.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-                            guard parts.count >= 2, let amount = Double(parts[0]) else { failed = true; break }
-                            let unit = parts.dropFirst().joined(separator: " ").lowercased()
+                            guard let firstPart = parts.first, let amount = Double(firstPart) else { failed = true; break }
+                            // Default to "days" when the number has no trailing unit word.
+                            let unit = parts.count >= 2 ? parts.dropFirst().joined(separator: " ").lowercased() : "days"
                             let value = Int(amount) * (isNeg ? -1 : 1)
                             var stepped: Date?
                             if unit.hasPrefix("sec") { stepped = calendar.date(byAdding: .second, value: value, to: current); showTime = true }
@@ -519,7 +564,17 @@ struct MathEvaluator {
     }
 
     private static func parseDate(_ str: String) -> Date? {
-        let lower = str.lowercased().trimmingCharacters(in: .whitespaces)
+        // Expand 2-digit years first — "5/21/25" → "5/21/2025".
+        // DateFormatter with `M/d/yyyy` otherwise reads "25" as literal year 25 AD.
+        var normalizedRaw = str.trimmingCharacters(in: .whitespaces)
+        if normalizedRaw.range(of: #"^\d{1,2}/\d{1,2}/\d{2}$"#, options: .regularExpression) != nil {
+            let parts = normalizedRaw.split(separator: "/")
+            if parts.count == 3, let yy = Int(parts[2]) {
+                let full = yy <= 30 ? 2000 + yy : 1900 + yy
+                normalizedRaw = "\(parts[0])/\(parts[1])/\(full)"
+            }
+        }
+        let lower = normalizedRaw.lowercased()
 
         // Named dates
         let calendar = Calendar.current
@@ -559,13 +614,15 @@ struct MathEvaluator {
         let formats = [
             "MMMM d, yyyy", "MMMM d yyyy", "MMM d, yyyy", "MMM d yyyy",
             "MMMM d", "MMM d", "M/d/yyyy", "M/d/yy", "M/d",
-            "yyyy-MM-dd", "MM-dd-yyyy", "d MMMM yyyy", "d MMMM", "d MMM"
+            "yyyy-MM-dd", "MM-dd-yyyy", "d MMMM yyyy", "d MMMM", "d MMM",
+            // Month + year only — resolves to the 1st ("september 2025" → 2025-09-01)
+            "MMMM yyyy", "MMM yyyy",
         ]
         for format in formats {
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US")
             df.dateFormat = format
-            if let date = df.date(from: str) {
+            if let date = df.date(from: normalizedRaw) {
                 // If no year in format, set current year
                 if !format.contains("y") {
                     var comps = calendar.dateComponents([.month, .day], from: date)
@@ -1156,36 +1213,132 @@ struct MathEvaluator {
     private static func evaluateCurrency(_ input: String) -> (expression: String, result: String)? {
         let lower = input.lowercased()
 
-        // Pattern: "<number><currency> to/in <currency>" (space optional between number and currency)
+        // Pattern: "<number><currency> to/in <currency> [ [on|at] <date> ]".
+        // Anything after the second currency (with or without an "on"/"at"
+        // marker) is treated as a historical date. Rate comes from Frankfurter.
         let regex = try! NSRegularExpression(pattern: #"^([\d.,]+)\s*(.+?)\s+(?:to|in)\s+(.+)$"#)
         let nsRange = NSRange(lower.startIndex..., in: lower)
         guard let match = regex.firstMatch(in: lower, range: nsRange) else { return nil }
 
         let numStr = String(lower[Range(match.range(at: 1), in: lower)!]).replacingOccurrences(of: ",", with: "")
         let fromStr = String(lower[Range(match.range(at: 2), in: lower)!]).trimmingCharacters(in: .whitespaces)
-        let toStr = String(lower[Range(match.range(at: 3), in: lower)!]).trimmingCharacters(in: .whitespaces)
+        let rhsRaw = String(lower[Range(match.range(at: 3), in: lower)!]).trimmingCharacters(in: .whitespaces)
 
         guard let value = parseNumber(numStr),
-              let fromCurrency = currencyNames[fromStr],
-              let toCurrency = currencyNames[toStr] else { return nil }
+              let fromCurrency = currencyNames[fromStr] else { return nil }
 
-        // Check if we have rates cached
+        // Split the RHS into "<toCurrency> [<dateExpr>]". The currency is the
+        // FIRST token that resolves to a known code; everything after it (with
+        // optional "on"/"at" prefix stripped) is the date.
+        let rhsTokens = rhsRaw.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        var toCurrency: String?
+        var currencyEndIdx = 0
+        for i in 1...rhsTokens.count {
+            let candidate = rhsTokens[..<i].joined(separator: " ")
+            if let cur = currencyNames[candidate] {
+                toCurrency = cur
+                currencyEndIdx = i
+            }
+        }
+        guard let toCurrency else { return nil }
+        var dateExpr = rhsTokens[currencyEndIdx...].joined(separator: " ")
+        dateExpr = dateExpr.replacingOccurrences(
+            of: #"^(on|at|as of)\s+"#,
+            with: "", options: [.regularExpression, .caseInsensitive]
+        ).trimmingCharacters(in: .whitespaces)
+
+        // Historical branch — parse the date suffix and fetch from Frankfurter.
+        if !dateExpr.isEmpty {
+            guard var d = parseDate(dateExpr) else { return nil }
+            // parseDate auto-advances a bare M/D past today to next year (so
+            // "10/1" means the next Oct 1 for date-arithmetic). For historical
+            // FX the opposite is correct: roll back to the prior occurrence
+            // if we landed in the future.
+            let now = Date()
+            if d > now {
+                d = Calendar.current.date(byAdding: .year, value: -1, to: d) ?? d
+            }
+            let iso = Self.isoDateFormatter.string(from: d)
+            if let rate = historicalRate(iso: iso, from: fromCurrency, to: toCurrency) {
+                let converted = value * rate
+                return (expression: input,
+                        result: "\(formatCurrency(converted)) \(toCurrency.uppercased()) (on \(iso))")
+            }
+            fetchHistoricalRate(iso: iso, from: fromCurrency, to: toCurrency)
+            return (expression: input, result: "Loading \(iso) rate…")
+        }
+
+        // Live-rates branch.
         if let rates = getCachedRates(),
            let fromRate = rates[fromCurrency],
            let toRate = rates[toCurrency] {
             let converted = value / fromRate * toRate
-            let fmt = NumberFormatter()
-            fmt.numberStyle = .decimal
-            fmt.maximumFractionDigits = 2
-            fmt.minimumFractionDigits = 2
-            fmt.usesGroupingSeparator = true
-            let formatted = fmt.string(from: NSNumber(value: converted)) ?? String(format: "%.2f", converted)
-            return (expression: input, result: "\(formatted) \(toCurrency.uppercased())")
+            return (expression: input, result: "\(formatCurrency(converted)) \(toCurrency.uppercased())")
         }
-
-        // Fetch rates async, return placeholder
         fetchRates()
         return (expression: input, result: "Loading rates...")
+    }
+
+    // MARK: - Historical FX (Frankfurter — free, no key, ECB rates back to 1999)
+
+
+    private static var historicalRates: [String: Double] = [:]  // "YYYY-MM-DD|FROM|TO" -> rate
+    private static var historicalInflight: Set<String> = []
+    private static let isoDateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        df.timeZone = TimeZone(identifier: "UTC")
+        df.locale = Locale(identifier: "en_US_POSIX")
+        return df
+    }()
+
+    private static func historicalKey(iso: String, from: String, to: String) -> String {
+        "\(iso)|\(from.lowercased())|\(to.lowercased())"
+    }
+
+    private static func historicalRate(iso: String, from: String, to: String) -> Double? {
+        // Same-currency conversion is always 1 — no need to hit the network.
+        if from.lowercased() == to.lowercased() { return 1.0 }
+        return historicalRates[historicalKey(iso: iso, from: from, to: to)]
+    }
+
+    private static func fetchHistoricalRate(iso: String, from: String, to: String) {
+        let key = historicalKey(iso: iso, from: from, to: to)
+        // Skip if already in flight.
+        guard !historicalInflight.contains(key) else { return }
+        historicalInflight.insert(key)
+
+        // Frankfurter: https://api.frankfurter.dev/v1/2025-05-21?base=USD&symbols=CNY
+        let f = from.uppercased(), t = to.uppercased()
+        guard let url = URL(string: "https://api.frankfurter.dev/v1/\(iso)?base=\(f)&symbols=\(t)") else { return }
+
+        URLSession.shared.dataTask(with: url) { data, _, error in
+            defer { DispatchQueue.main.async { historicalInflight.remove(key) } }
+            guard error == nil, let data else { return }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let rates = json["rates"] as? [String: Double],
+                  let rate = rates[t] else { return }
+            DispatchQueue.main.async {
+                historicalRates[key] = rate
+                // Cache the inverse too — Frankfurter's underlying ECB anchor
+                // is the same either direction.
+                if rate > 0 {
+                    historicalRates[historicalKey(iso: iso, from: to, to: from)] = 1.0 / rate
+                }
+                NotificationCenter.default.post(name: .beamRatesUpdated, object: nil)
+            }
+        }.resume()
+    }
+
+    /// Format a double as a grouped, 2-decimal string (helper used by both
+    /// live and historical currency-conversion paths).
+    private static func formatCurrency(_ value: Double) -> String {
+        let fmt = NumberFormatter()
+        fmt.numberStyle = .decimal
+        fmt.maximumFractionDigits = 2
+        fmt.minimumFractionDigits = 2
+        fmt.usesGroupingSeparator = true
+        return fmt.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
     }
 
     private static func getCachedRates() -> [String: Double]? {
@@ -1212,6 +1365,7 @@ struct MathEvaluator {
                     }
                     exchangeRates = normalized
                     ratesLastFetched = Date()
+                    NotificationCenter.default.post(name: .beamRatesUpdated, object: nil)
                 }
             }
         }.resume()
@@ -1274,6 +1428,12 @@ struct MathEvaluator {
         ("hectare", "acre", "acres"), ("ha", "acre", "acres"),
         ("cumm", "cuin", "cu in"), ("cucm", "cuin", "cu in"),
         ("cum", "cuft", "cu ft"), ("cukm", "cumi", "cu mi"),
+        // US → metric direction — a bare `58"` (58 inches) should surface `147.32 cm`.
+        ("in", "cm", "cm"), ("ft", "m", "m"), ("mi", "km", "km"),
+        ("lb", "kg", "kg"), ("oz", "g", "g"),
+        ("gal", "l", "L"), ("floz", "ml", "mL"),
+        ("f", "c", "C"),
+        ("mph", "kph", "km/h"),
     ]
 
     private static func evaluateAutoUnitConvert(_ input: String) -> (expression: String, result: String)? {
@@ -1282,8 +1442,9 @@ struct MathEvaluator {
         // Make sure there's no "to" or "in" (that's handled by explicit conversion)
         guard !lower.contains(" to "), !lower.contains(" in "), !lower.contains(" as ") else { return nil }
 
-        // Pattern: "<number><unit>" or "<number> <unit>" (space optional)
-        let regex = try! NSRegularExpression(pattern: #"^(-?[\d,.]+)\s*([a-z/°]+.*)$"#)
+        // Pattern: "<number><unit>" or "<number> <unit>" (space optional).
+        // Accepts inch/foot quote glyphs — `58"` → 58 in, `6'` → 6 ft.
+        let regex = try! NSRegularExpression(pattern: #"^(-?[\d,.]+)\s*([a-z/°"'′″]+.*)$"#)
         let nsRange = NSRange(lower.startIndex..., in: lower)
         guard let match = regex.firstMatch(in: lower, range: nsRange) else { return nil }
 
@@ -1591,7 +1752,9 @@ struct MathEvaluator {
 
     private static func evaluateAbbreviation(_ input: String) -> (expression: String, result: String)? {
         let s = input.lowercased().replacingOccurrences(of: ",", with: "").trimmingCharacters(in: .whitespaces)
-        let pattern = #"^([\d.]+)\s*(k|mil|milion|million|m|billion|bil|b|trillion|tril|t)$"#
+        // Bare single "m" is excluded — that's metres, handled by
+        // evaluateAutoUnitConvert. "mil"/"million"/"milion" are the money suffixes.
+        let pattern = #"^([\d.]+)\s*(k|mil|milion|million|billion|bil|b|trillion|tril|t)$"#
         guard s.range(of: pattern, options: .regularExpression) != nil,
               let value = parseNumber(s), value != Double(s) else { return nil }
         return (expression: input, result: format(value))
@@ -1622,12 +1785,17 @@ struct MathEvaluator {
         }
     }
 
-    /// Expands abbreviations inline within an expression string (e.g. "5k + 2m" -> "5000 + 2000000")
+    /// Expands abbreviations inline within an expression string (e.g. "5k + 2m" -> "5000 + 2000000").
+    /// Bare single "m" only expands to million when the expression has currency
+    /// signals (`$`, `usd`, `eur`, …) — otherwise `2.5m` is metres, handled by
+    /// the auto-unit-convert path.
     private static func expandAbbreviations(_ expr: String) -> String {
-        // Single-letter m/b/t only expand here (math-expression context, operator required),
-        // so they don't clash with "m" = meters in unit conversions. Longest alternatives
-        // first; the trailing \b also stops "m" from matching inside "million".
-        let pattern = #"(\d[\d,.]*)\s*(k|million|milion|mil|m|billion|bil|b|trillion|tril|t)\b"#
+        let currencyPattern = #"[\$€£¥₪]|\b(usd|eur|gbp|jpy|cad|aud|chf|cny|rmb|ils|nis|inr|mxn|brl|krw|sek|nok|dkk|sgd|hkd|nzd|aed|zar|thb|pln)\b"#
+        let hasCurrency = expr.range(of: currencyPattern, options: [.regularExpression, .caseInsensitive]) != nil
+        let suffixes = hasCurrency
+            ? #"k|million|milion|mil|m|billion|bil|b|trillion|tril|t"#
+            : #"k|million|milion|mil|billion|bil|b|trillion|tril|t"#
+        let pattern = #"(\d[\d,.]*)\s*(\#(suffixes))\b"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return expr }
         var result = expr
         // Process matches from end to preserve ranges
@@ -1809,4 +1977,10 @@ struct MathEvaluator {
         }
         return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
+}
+
+extension Notification.Name {
+    /// Posted whenever live or historical FX rates finish loading, so any
+    /// "Loading rates…" placeholder row can be re-evaluated with real data.
+    static let beamRatesUpdated = Notification.Name("beamRatesUpdated")
 }

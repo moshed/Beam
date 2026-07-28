@@ -146,79 +146,60 @@
       margin: 0 0 56px 0;
     }
 
-    /* The Prompt — heart of the page */
-    .prompt {
-      background: var(--glass-strong);
-      border: 1px solid var(--border-strong);
+    /* Hero video reel — the page's real signature.
+       Four MP4 clips stacked, only one visible at a time, crossfade on end. */
+    .reel {
+      max-width: 760px;
       border-radius: 18px;
-      padding: 24px 28px;
-      display: flex; flex-direction: column;
-      gap: 14px;
-      max-width: 720px;
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      box-shadow: 0 24px 80px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.02) inset;
+      overflow: hidden;
+      border: 1px solid var(--border-strong);
+      background: #cfd0d5;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.02) inset;
     }
-    .prompt-row {
-      display: flex; align-items: center; gap: 12px;
-      min-height: 32px;
+    .reel-stack {
+      position: relative;
+      aspect-ratio: 20 / 11;   /* matches the 1000×560ish crop of the panel */
+      width: 100%;
     }
-    .prompt-sigil {
-      width: 24px; height: 24px;
-      display: grid; place-items: center;
-      color: var(--beam);
-    }
-    .prompt-sigil svg { width: 20px; height: 20px; }
-    .prompt-text {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 20px;
-      font-weight: 500;
-      color: var(--ink);
-      flex: 1;
-      letter-spacing: -0.01em;
-    }
-    .cursor {
-      display: inline-block;
-      width: 2px; height: 22px;
-      background: var(--beam);
-      box-shadow: 0 0 10px var(--beam-glow);
-      vertical-align: middle;
-      animation: blink 1.05s steps(2) infinite;
-      margin-left: 2px;
-      translate: 0 -1px;
-    }
-    @keyframes blink { 50% { opacity: 0; } }
-
-    .prompt-result {
-      display: flex; align-items: center; gap: 12px;
-      padding-top: 14px;
-      border-top: 1px solid var(--border);
+    .reel-stack video {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
       opacity: 0;
-      transition: opacity 0.3s;
-      min-height: 40px;
+      transition: opacity 0.6s ease;
     }
-    .prompt-result.show { opacity: 1; }
-    .result-icon {
-      width: 24px; height: 24px;
-      color: var(--result);
-      display: grid; place-items: center;
-      font-size: 14px;
+    .reel-stack video.active { opacity: 1; }
+    .reel-meta {
+      background: var(--bg-lift);
+      padding: 14px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 20px;
+      border-top: 1px solid var(--border);
     }
-    .result-icon.money { color: var(--money); }
-    .result-icon.date { color: #A5C9F5; }
-    .result-icon.call { color: #F5A5B8; }
-    .result-icon.place { color: #D6A5F5; }
-    .result-text {
+    .reel-cap {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 18px;
-      color: var(--ink);
-      font-weight: 500;
-    }
-    .result-subtitle {
-      font-family: 'Inter', sans-serif;
-      color: var(--ink-mute);
       font-size: 13px;
-      margin-left: 8px;
+      color: var(--beam);
+      letter-spacing: -0.01em;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .reel-dots {
+      display: flex; gap: 8px;
+      flex-shrink: 0;
+    }
+    .reel-dots .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.15);
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.2s;
+    }
+    .reel-dots .dot:hover { background: rgba(255,255,255,0.35); }
+    .reel-dots .dot.active {
+      background: var(--beam);
+      box-shadow: 0 0 8px var(--beam-glow);
     }
 
     /* Hero download */
@@ -560,9 +541,8 @@
       nav { padding: 16px 20px; }
       section { padding: 80px 20px; }
       .hero { min-height: auto; padding-top: 120px; }
-      .prompt { padding: 20px; }
-      .prompt-text { font-size: 16px; }
-      .result-text { font-size: 15px; }
+      .reel-meta { padding: 12px 16px; gap: 12px; }
+      .reel-cap { font-size: 12px; }
       .cap-grid { grid-template-columns: 1fr; }
       .rel { grid-template-columns: 1fr; gap: 8px; padding: 20px; }
       .install { grid-template-columns: 1fr; padding: 28px; }
@@ -597,21 +577,20 @@
         Math, currency, calendar events, contacts, phone calls — one keystroke away.
       </p>
 
-      <div class="prompt" aria-live="polite">
-        <div class="prompt-row">
-          <div class="prompt-sigil" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
-            </svg>
-          </div>
-          <div class="prompt-text" id="prompt-text"></div>
-          <span class="cursor" aria-hidden="true"></span>
+      <div class="reel" role="region" aria-label="Beam demo reel">
+        <div class="reel-stack" id="reel-stack">
+          <video data-caption="10 chickens × 4.5 lbs / 7 people" src="./site/video/labels.mp4"     poster="./site/posters/labels.jpg"     muted playsinline preload="auto"></video>
+          <video data-caption="5mm × 6.7mm × 13mm"              src="./site/video/dimensions.mp4" poster="./site/posters/dimensions.jpg" muted playsinline preload="auto"></video>
+          <video data-caption="Dr Jones 8:30am 8/1"             src="./site/video/calendar.mp4"   poster="./site/posters/calendar.jpg"   muted playsinline preload="auto"></video>
+          <video data-caption="inconsolable"                    src="./site/video/definition.mp4" poster="./site/posters/definition.jpg" muted playsinline preload="auto"></video>
         </div>
-        <div class="prompt-result" id="prompt-result">
-          <div class="result-icon" id="result-icon">=</div>
-          <div>
-            <span class="result-text" id="result-text"></span>
-            <span class="result-subtitle" id="result-subtitle"></span>
+        <div class="reel-meta">
+          <span class="reel-cap" id="reel-cap">10 chickens × 4.5 lbs / 7 people</span>
+          <div class="reel-dots" id="reel-dots">
+            <button class="dot active" data-i="0" aria-label="Labels demo"></button>
+            <button class="dot" data-i="1" aria-label="Dimensions demo"></button>
+            <button class="dot" data-i="2" aria-label="Calendar demo"></button>
+            <button class="dot" data-i="3" aria-label="Definition demo"></button>
           </div>
         </div>
       </div>
@@ -693,51 +672,6 @@
       </div>
     </section>
 
-    <!-- LIVE DEMOS — real video captures cropped to just the panel -->
-    <section>
-      <div class="cap-header">
-        <div class="section-eyebrow">See it happen</div>
-        <h2 class="section-title">Actual keystrokes, actual results.</h2>
-        <p class="section-lede">
-          Four ~10-second clips captured from Beam itself. No stitching, no cuts — just the panel doing its job.
-        </p>
-      </div>
-      <div class="reel-grid">
-        <figure class="reel">
-          <video src="./site/video/labels.mp4" poster="./site/posters/labels.jpg"
-                 muted autoplay loop playsinline preload="metadata"></video>
-          <figcaption>
-            <span class="reel-label">Labels struck through</span>
-            <span class="reel-q">10 chickens × 4.5 lbs / 7 people</span>
-          </figcaption>
-        </figure>
-        <figure class="reel">
-          <video src="./site/video/dimensions.mp4" poster="./site/posters/dimensions.jpg"
-                 muted autoplay loop playsinline preload="metadata"></video>
-          <figcaption>
-            <span class="reel-label">3D dimensions, mixed units</span>
-            <span class="reel-q">5mm × 6.7mm × 13mm</span>
-          </figcaption>
-        </figure>
-        <figure class="reel">
-          <video src="./site/video/calendar.mp4" poster="./site/posters/calendar.jpg"
-                 muted autoplay loop playsinline preload="metadata"></video>
-          <figcaption>
-            <span class="reel-label">Calendar quick-add</span>
-            <span class="reel-q">Dr Jones 8:30am 8/1</span>
-          </figcaption>
-        </figure>
-        <figure class="reel">
-          <video src="./site/video/definition.mp4" poster="./site/posters/definition.jpg"
-                 muted autoplay loop playsinline preload="metadata"></video>
-          <figcaption>
-            <span class="reel-label">Dictionary in the search bar</span>
-            <span class="reel-q">inconsolable</span>
-          </figcaption>
-        </figure>
-      </div>
-    </section>
-
     <!-- INSTALL -->
     <section>
       <div class="cap-header">
@@ -783,57 +717,50 @@
   </footer>
 
   <script>
-    // ─── Live prompt: cycles through real Beam queries with typing + result ───
-    const scenes = [
-      { q: '$450,344.20 - 100k - 10815', r: '$339,529.20', sub: '',                       icon: '$',  cls: 'money' },
-      { q: '10/1 + 30 + 25',              r: 'November 25, 2026', sub: '',                icon: '◐',  cls: 'date' },
-      { q: '1 usd to cny on 5/21/25',    r: '7.20 CNY',           sub: 'on 2025-05-21',   icon: '$',  cls: 'money' },
-      { q: 'Global Entry Interview 8:30 fri', r: 'Fri, Jul 31 · 8:30 AM', sub: 'at JFK Airport, Terminal 4', icon: '◐', cls: 'date' },
-      { q: '58" to cm',                   r: '147.32 cm',          sub: '',                icon: '=', cls: '' },
-      { q: '12:30pm ny to utah',          r: '10:30 AM Denver',   sub: '(from New York)', icon: '⏱', cls: '' },
-      { q: 'mount sinai hospital nyc',    r: 'The Mount Sinai Hospital', sub: '1468 Madison Ave', icon: '◉', cls: 'place' },
-      { q: '5.22 fob x 12',               r: '62.64',              sub: '',                icon: '=', cls: '' },
-    ];
+    // ─── Hero reel: crossfade between the four Beam demo clips ───
+    // Each video ends → fade to the next → play it. Dots let you skip.
+    (function initReel() {
+      const stack = document.getElementById('reel-stack');
+      const dotsEl = document.getElementById('reel-dots');
+      const capEl = document.getElementById('reel-cap');
+      const vids = [...stack.querySelectorAll('video')];
+      const dots = [...dotsEl.querySelectorAll('.dot')];
+      let cur = 0;
 
-    const pText = document.getElementById('prompt-text');
-    const pRes  = document.getElementById('prompt-result');
-    const rText = document.getElementById('result-text');
-    const rSub  = document.getElementById('result-subtitle');
-    const rIcon = document.getElementById('result-icon');
-
-    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    async function type(str) {
-      pText.textContent = '';
-      pRes.classList.remove('show');
-      if (reduce) { pText.textContent = str; return; }
-      for (let i = 0; i < str.length; i++) {
-        pText.textContent += str[i];
-        await sleep(28 + Math.random() * 40);
+      function show(i) {
+        cur = (i + vids.length) % vids.length;
+        vids.forEach((v, j) => v.classList.toggle('active', j === cur));
+        dots.forEach((d, j) => d.classList.toggle('active', j === cur));
+        capEl.textContent = vids[cur].dataset.caption;
+        const v = vids[cur];
+        v.currentTime = 0;
+        v.play().catch(() => { /* Safari autoplay quirk — ignore */ });
       }
-    }
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-    async function showResult(scene) {
-      rText.textContent = scene.r;
-      rSub.textContent = scene.sub;
-      rIcon.textContent = scene.icon;
-      rIcon.className = 'result-icon ' + scene.cls;
-      pRes.classList.add('show');
-    }
+      // When the current clip finishes, advance.
+      vids.forEach((v, i) => {
+        v.addEventListener('ended', () => { if (i === cur) show(cur + 1); });
+        // In case a video is really short and 'ended' doesn't fire cleanly,
+        // fall back to a max-duration timer once metadata loads.
+        v.addEventListener('loadedmetadata', () => {
+          v.dataset.maxMs = Math.max(3000, Math.round((v.duration || 8) * 1000));
+        });
+      });
 
-    async function play() {
-      let i = 0;
-      while (true) {
-        const s = scenes[i % scenes.length];
-        await type(s.q);
-        await sleep(reduce ? 1200 : 380);
-        await showResult(s);
-        await sleep(reduce ? 2000 : 3400);
-        i++;
-      }
-    }
-    play();
+      dots.forEach(d => d.addEventListener('click', () => show(+d.dataset.i)));
+
+      // Safety-net: if a video errors or stalls, advance after its max time.
+      setInterval(() => {
+        const v = vids[cur];
+        if (!v.dataset.maxMs) return;
+        if (v.paused || v.currentTime * 1000 > +v.dataset.maxMs + 500) {
+          // Skip forward if stuck.
+          show(cur + 1);
+        }
+      }, 2000);
+
+      show(0);
+    })();
 
     // ─── Latest release + changelog: parse the same appcast the app uses ───
     async function loadReleases() {

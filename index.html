@@ -370,6 +370,58 @@
       display: block;
       margin-top: 2px;
     }
+    /* Real screenshot instead of the old CSS mock */
+    .cap-shot {
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      display: block;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    }
+
+    /* Video reel — 2×2 grid, tight-cropped panel MP4s autoplaying */
+    .reel-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 24px;
+    }
+    .reel {
+      margin: 0;
+      background: var(--glass);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .reel:hover { border-color: var(--border-strong); }
+    .reel video {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #cfd0d5;  /* matches the light panel background of Beam */
+    }
+    .reel figcaption {
+      padding: 14px 18px;
+      display: flex; flex-direction: column; gap: 4px;
+      border-top: 1px solid var(--border);
+    }
+    .reel-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--beam);
+    }
+    .reel-q {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--ink);
+    }
+    @media (max-width: 720px) {
+      .reel-grid { grid-template-columns: 1fr; gap: 16px; }
+    }
 
     /* Releases */
     .releases {
@@ -593,86 +645,96 @@
         <article class="cap">
           <span class="cap-label">Money math</span>
           <h3 class="cap-title">Numbers with dollar signs, dashes, and abbreviations — sane.</h3>
-          <p class="cap-lede">Currency-aware arithmetic that keeps the units straight, expands k/m/b, and handles calculator-style percentages.</p>
-          <div class="cap-demo">
-            <div class="q">$450,344.20 − 100k − 10815</div>
-            <span class="r money">$339,529.20</span>
-          </div>
+          <p class="cap-lede">Currency-aware arithmetic that keeps units straight, expands k/m/b, and handles calculator-style percentages.</p>
+          <img class="cap-shot" src="./site/shots/01-currency-abbrev.png" alt="Beam converting 20k rmb to $2,950.84" loading="lazy">
         </article>
 
         <article class="cap">
-          <span class="cap-label">Historical FX</span>
-          <h3 class="cap-title">Any currency, any date, back to 1999.</h3>
-          <p class="cap-lede">ECB reference rates via Frankfurter (free, no API key). "on september 2025", "5/21", or a full date — Beam figures it out.</p>
-          <div class="cap-demo">
-            <div class="q">1 usd to cny on 5/21/25</div>
-            <span class="r money">7.20 CNY</span>
-            <span class="r-sub">on 2025-05-21</span>
-          </div>
+          <span class="cap-label">Labels stay in the copy</span>
+          <h3 class="cap-title">Type notes with the numbers. They stay for context, not calculation.</h3>
+          <p class="cap-lede">Words like "chickens", "lbs", "people" get struck through so the math runs clean — but Copy&nbsp;query&nbsp;+&nbsp;result keeps them.</p>
+          <img class="cap-shot" src="./site/shots/02-labels.png" alt="10 chickens x 2.84 lbs / 4 people = 7.1, with labels struck through" loading="lazy">
         </article>
 
         <article class="cap">
           <span class="cap-label">Date arithmetic</span>
           <h3 class="cap-title">Bare numbers default to days after a date.</h3>
-          <p class="cap-lede">Chain months, weeks, and days — or skip the unit word entirely when the base is obviously a date.</p>
-          <div class="cap-demo">
-            <div class="q">10/1 + 30 + 25</div>
-            <span class="r date">November 25, 2026</span>
-          </div>
+          <p class="cap-lede">Chain months, weeks, and days — or skip the unit entirely when the base is obviously a date.</p>
+          <img class="cap-shot" src="./site/shots/03-date.png" alt="today + 30 + 55 = October 21, 2026" loading="lazy">
         </article>
 
         <article class="cap">
           <span class="cap-label">Calendar quick-add</span>
           <h3 class="cap-title">Type an event the way you'd say it.</h3>
-          <p class="cap-lede">Title, time, and multi-part venue parsed together. Shift+Enter to pick a calendar; a default calendar lives in Settings.</p>
-          <div class="cap-demo">
-            <div class="q">Global Entry Interview JFK Airport Terminal 4 8:30 fri</div>
-            <span class="r date">Fri, Jul 31 · 8:30 AM</span>
-            <span class="r-sub">at JFK Airport, Terminal 4</span>
-          </div>
+          <p class="cap-lede">Title, time, and location parsed together. Shift+Enter to pick a calendar; a default calendar lives in Settings.</p>
+          <img class="cap-shot" src="./site/shots/06-calendar-quickadd.png" alt="Dr Jones 10:30 8/1 → Create: New Event, Aug 1, 2026 at 10:30 AM" loading="lazy">
         </article>
 
         <article class="cap">
           <span class="cap-label">Contacts &amp; calling</span>
           <h3 class="cap-title">Ring a phone from your Mac, silently.</h3>
-          <p class="cap-lede">Enter dials via iPhone Continuity through Contacts.app — no popup, no FaceTime window. "All options…" pops a menu with every phone, email, and FaceTime target.</p>
-          <div class="cap-demo">
-            <div class="q">Fesco</div>
-            <span class="r call">FESCO Trading Co.</span>
-            <span class="r-sub">+1 (212) 260-0666 · call, message, FaceTime</span>
-          </div>
+          <p class="cap-lede">Enter dials via iPhone Continuity through Contacts.app — no popup, no FaceTime window. "All&nbsp;options…" pops a menu with every phone, email, and FaceTime target.</p>
+          <img class="cap-shot" src="./site/shots/07-contact.png" alt="Contact search result with Call/Message/FaceTime shortcuts" loading="lazy">
         </article>
 
         <article class="cap">
-          <span class="cap-label">Places</span>
-          <h3 class="cap-title">Address lookup with a name attached.</h3>
-          <p class="cap-lede">Apple Maps under the hood, US-biased region. Grab a full-formatted address or drop the place straight into a calendar event.</p>
-          <div class="cap-demo">
-            <div class="q">mount sinai hospital nyc</div>
-            <span class="r place">The Mount Sinai Hospital</span>
-            <span class="r-sub">1468 Madison Ave, New York, NY 10029</span>
-          </div>
+          <span class="cap-label">Multi-section results</span>
+          <h3 class="cap-title">One query. App, definition, files, emoji — all grouped.</h3>
+          <p class="cap-lede">Beam merges results across every searcher and lets you reorder or rebind sections in Settings.</p>
+          <img class="cap-shot" src="./site/shots/04-multi-section.png" alt="Search 'maps' — grouped App / Emoji / Definition / File results" loading="lazy">
         </article>
 
         <article class="cap">
-          <span class="cap-label">Time zones</span>
-          <h3 class="cap-title">Convert time across cities or US states.</h3>
-          <p class="cap-lede">"12:30pm ny to utah", "3pm to sydney" — cities, states, or TZ identifiers all work.</p>
-          <div class="cap-demo">
-            <div class="q">12:30pm ny to utah</div>
-            <span class="r">12:30 PM New York → 10:30 AM Denver</span>
-          </div>
+          <span class="cap-label">Emoji &amp; unicode</span>
+          <h3 class="cap-title">A grid you can keyboard through.</h3>
+          <p class="cap-lede">Type any word, get every relevant emoji + unicode glyph. Press Down to focus the grid (blue), then Left/Right/Up/Down to pick.</p>
+          <img class="cap-shot" src="./site/shots/05-emoji-grid.png" alt="Emoji grid for the search 'angry'" loading="lazy">
         </article>
+      </div>
+    </section>
 
-        <article class="cap">
-          <span class="cap-label">Units &amp; unicode</span>
-          <h3 class="cap-title">Everything else — because sometimes you just need one.</h3>
-          <p class="cap-lede">Bare units auto-convert (58" → 147 cm, 5 lb → 2.27 kg). Emoji + Unicode grids with keyboard focus. Ask AI via Ollama.</p>
-          <div class="cap-demo">
-            <div class="q">58"</div>
-            <span class="r">147.32 cm</span>
-          </div>
-        </article>
+    <!-- LIVE DEMOS — real video captures cropped to just the panel -->
+    <section>
+      <div class="cap-header">
+        <div class="section-eyebrow">See it happen</div>
+        <h2 class="section-title">Actual keystrokes, actual results.</h2>
+        <p class="section-lede">
+          Four ~10-second clips captured from Beam itself. No stitching, no cuts — just the panel doing its job.
+        </p>
+      </div>
+      <div class="reel-grid">
+        <figure class="reel">
+          <video src="./site/video/labels.mp4" poster="./site/posters/labels.jpg"
+                 muted autoplay loop playsinline preload="metadata"></video>
+          <figcaption>
+            <span class="reel-label">Labels struck through</span>
+            <span class="reel-q">10 chickens × 4.5 lbs / 7 people</span>
+          </figcaption>
+        </figure>
+        <figure class="reel">
+          <video src="./site/video/dimensions.mp4" poster="./site/posters/dimensions.jpg"
+                 muted autoplay loop playsinline preload="metadata"></video>
+          <figcaption>
+            <span class="reel-label">3D dimensions, mixed units</span>
+            <span class="reel-q">5mm × 6.7mm × 13mm</span>
+          </figcaption>
+        </figure>
+        <figure class="reel">
+          <video src="./site/video/calendar.mp4" poster="./site/posters/calendar.jpg"
+                 muted autoplay loop playsinline preload="metadata"></video>
+          <figcaption>
+            <span class="reel-label">Calendar quick-add</span>
+            <span class="reel-q">Dr Jones 8:30am 8/1</span>
+          </figcaption>
+        </figure>
+        <figure class="reel">
+          <video src="./site/video/definition.mp4" poster="./site/posters/definition.jpg"
+                 muted autoplay loop playsinline preload="metadata"></video>
+          <figcaption>
+            <span class="reel-label">Dictionary in the search bar</span>
+            <span class="reel-q">inconsolable</span>
+          </figcaption>
+        </figure>
       </div>
     </section>
 
